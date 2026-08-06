@@ -1,6 +1,5 @@
 {
-  "_comment": "Catalog of SenArch SenOS mesh command types (proprietary range 128-255). Single source of truth for the meaning of each command type. Keep aligned with the SenOS image on your gateways. 'params' describe an optional command payload (reserved for future parameterised commands).",
-  "senos_min_version": "2.1.0",
+  "_comment": "Catalog of mesh command types (proprietary range 128-255): the meaning of each type for display/labelling. The authoritative set a given relay can run comes from the relay itself (its [commands.commands]); use 'discover' to query it. 'params' describe an optional command payload (reserved for future parameterised commands).",
   "commands": [
     {
       "type": 128,
