@@ -16,8 +16,8 @@ It is a single Python file using **only the standard library** (no `pip install`
 ## Install
 
 ```
-git clone <this repo>
-cd mesh-cmd
+git clone https://github.com/Senarch/senarch-chirpstack-mesh-cmd.git
+cd senarch-chirpstack-mesh-cmd
 cp mesh-cmd.conf.example mesh-cmd.conf   # then edit it
 ```
 
@@ -99,7 +99,6 @@ That way a leaked operator machine cannot impersonate a gateway or read device t
 
 `mesh-cmd` builds a `gw.MeshCommand` protobuf `{ gateway_id, relay_id, commands:[{ proprietary:{ command_type, payload } }] }`, publishes it to `<prefix>/gateway/<border_eui>/command/mesh`, subscribes to `<prefix>/gateway/<border_eui>/event/mesh`, and decodes the returned `gw.MeshEvent` ack. The relay must have the matching command type configured (`[commands.commands]`), and both gateways must share the mesh `root_key` (the command is authenticated + encrypted with it).
 
-## Before publishing this repo
+## License
 
-- Add a `LICENSE` (MIT is a good default for a community tool) and set the copyright holder.
-- Update the clone URL above and link it from the SenArch external documentation guide.
+MIT — see [LICENSE](LICENSE).
