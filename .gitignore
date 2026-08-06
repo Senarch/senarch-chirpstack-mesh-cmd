@@ -1,0 +1,4 @@
+# Local config holds credentials — never commit it.
+mesh-cmd.conf
+__pycache__/
+*.pyc

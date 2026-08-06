@@ -1,0 +1,17 @@
+# mesh-cmd configuration. Copy to mesh-cmd.conf and edit.
+# Precedence: CLI flags > environment variables > this file.
+
+[broker]
+# MQTT broker the Border Gateway is connected to. scheme://host[:port]
+#   ssl://  -> TLS (default port 8883), tcp:// -> plaintext (default port 1883)
+url      = ssl://lns.example.net:8883
+# Use a DEDICATED, ACL-scoped MQTT user (publish command/mesh, read event/mesh) --
+# NOT a shared gateway credential. See README "Security".
+username = mesh-operator
+password = CHANGE_ME
+
+[gateway]
+# The Border Gateway's EUI (16 hex chars).
+border_eui = 0016c001f117f8d8
+# MQTT topic prefix = the LNS region id the Border publishes under (e.g. eu868, us915_1).
+prefix     = eu868

@@ -1,0 +1,252 @@
+#!/usr/bin/env python3
+"""mesh-cmd - send a ChirpStack Gateway Mesh proprietary command to a relay.
+
+Pure Python standard library (socket + ssl only) -- no pip installs. Runs from
+any machine that can reach the MQTT broker the Border Gateway is connected to.
+
+It encodes a gw.MeshCommand protobuf and publishes it to
+  <prefix>/gateway/<border_eui>/command/mesh
+then prints the relay's ack (a gw.MeshEvent on <prefix>/gateway/<border_eui>/event/mesh).
+
+Config resolution (highest priority first): CLI flags > env vars > --config file.
+On a Border Gateway itself, --from-gateway reads broker+creds+prefix from
+/data/config/relay/mqtt-config.toml.
+
+Examples:
+  mesh-cmd --config ~/.mesh-cmd.conf reboot f117f28f
+  mesh-cmd --broker ssl://lns.example.net:8883 --user op --pass s3cret \\
+           --border-eui 0016c001f117f8d8 --prefix eu868 reboot f117f28f
+  mesh-cmd --config ~/.mesh-cmd.conf send f117f28f 129 48656c6c6f   # type 129, payload "Hello"
+
+NOTE: the Border's mqtt-forwarder must be in protobuf mode (mqtt.json=false, the
+default) -- this tool publishes protobuf.
+"""
+import argparse
+import configparser
+import os
+import re
+import socket
+import ssl
+import struct
+import sys
+import time
+
+# Friendly command-type names (128-255 are the proprietary range).
+NAMED_COMMANDS = {
+    "reboot": 128,
+    # "open-wifi": 129,   # planned (see gateway issue #387)
+}
+
+# ---------------- protobuf: encode gw.MeshCommand ----------------
+def _uv(n):
+    o = bytearray()
+    while True:
+        b = n & 0x7F; n >>= 7
+        o.append(b | 0x80 if n else b)
+        if not n:
+            return bytes(o)
+def _ld(field, data): return _uv((field << 3) | 2) + _uv(len(data)) + data
+def _vi(field, n):    return _uv((field << 3) | 0) + _uv(n)
+
+def build_mesh_command(border_eui, relay_id, cmd_type, payload=b""):
+    prop = _vi(1, cmd_type) + (_ld(2, payload) if payload else b"")   # MeshCommandProprietary
+    item = _ld(1, prop)                                               # MeshCommandItem.proprietary
+    return _ld(1, border_eui.encode()) + _ld(2, relay_id.encode()) + _ld(3, item)
+
+# ---------------- protobuf: decode gw.MeshEvent (ack) ----------------
+def _rv(b, i):
+    r = s = 0
+    while True:
+        x = b[i]; i += 1; r |= (x & 0x7F) << s
+        if not x & 0x80:
+            return r, i
+        s += 7
+def _fields(b):
+    i = 0; out = []
+    while i < len(b):
+        key, i = _rv(b, i); f, wt = key >> 3, key & 7
+        if wt == 0: v, i = _rv(b, i); out.append((f, 0, v))
+        elif wt == 2: l, i = _rv(b, i); out.append((f, 2, b[i:i+l])); i += l
+        elif wt == 5: out.append((f, 5, b[i:i+4])); i += 4
+        elif wt == 1: out.append((f, 1, b[i:i+8])); i += 8
+        else: break
+    return out
+def decode_mesh_event(b):
+    relay_id = None; evs = []
+    for f, wt, v in _fields(b):
+        if f == 2 and wt == 2: relay_id = v.decode(errors="replace")
+        if f == 4 and wt == 2:                       # MeshEventItem
+            for f2, wt2, v2 in _fields(v):
+                if f2 == 1 and wt2 == 2:             # proprietary
+                    et, pl = None, b""
+                    for f3, wt3, v3 in _fields(v2):
+                        if f3 == 1 and wt3 == 0: et = v3
+                        if f3 == 2 and wt3 == 2: pl = v3
+                    evs.append(("proprietary", et, pl))
+                elif f2 == 2 and wt2 == 2:
+                    evs.append(("heartbeat", None, b""))
+    return relay_id, evs
+
+# ---------------- minimal MQTT 3.1.1 ----------------
+def _s(x): b = x.encode(); return struct.pack("!H", len(b)) + b
+def _rl(n):
+    o = bytearray()
+    while True:
+        d = n % 128; n //= 128
+        o.append(d | 0x80 if n else d)
+        if not n:
+            return bytes(o)
+def _read_rl(sock):
+    n = s = 0
+    while True:
+        c = sock.recv(1)[0]; n |= (c & 0x7F) << s
+        if not c & 0x80:
+            return n
+        s += 7
+def _read_pkt(sock):
+    h = sock.recv(1)
+    if not h:
+        return None, None
+    ln = _read_rl(sock); buf = b""
+    while len(buf) < ln:
+        buf += sock.recv(ln - len(buf))
+    return h[0], buf
+
+def publish_and_wait(broker, user, pw, cmd_topic, evt_topic, payload, wait):
+    m = re.match(r'(tcp|ssl)://([^:/]+)(?::(\d+))?', broker)
+    if not m:
+        sys.exit("error: broker must be tcp://host[:port] or ssl://host[:port], got %r" % broker)
+    scheme, host = m.group(1), m.group(2)
+    port = int(m.group(3)) if m.group(3) else (8883 if scheme == "ssl" else 1883)
+    print("broker=%s://%s:%d user=%r" % (scheme, host, port, user))
+    print("pub -> %s\nsub <- %s" % (cmd_topic, evt_topic))
+
+    raw = socket.create_connection((host, port), timeout=15)
+    sock = ssl.create_default_context().wrap_socket(raw, server_hostname=host) if scheme == "ssl" else raw
+
+    vh = _s("MQTT") + bytes([4, 0xC2]) + struct.pack("!H", 30)   # clean + user + pass
+    body = vh + _s("mesh-cmd") + _s(user or "") + _s(pw or "")
+    sock.sendall(bytes([0x10]) + _rl(len(body)) + body)
+    t, b = _read_pkt(sock)
+    if t != 0x20 or not b or b[1] != 0:
+        sys.exit("MQTT CONNECT rejected (type=%s rc=%s) -- check broker/credentials" %
+                 (hex(t) if t else "?", b[1] if b else "?"))
+    print("connected.")
+
+    sock.sendall(bytes([0x82]) + _rl(len(struct.pack("!H", 1) + _s(evt_topic) + bytes([0]))) +
+                 struct.pack("!H", 1) + _s(evt_topic) + bytes([0]))
+    _read_pkt(sock)  # SUBACK
+
+    pub = _s(cmd_topic) + payload
+    sock.sendall(bytes([0x30]) + _rl(len(pub)) + pub)
+    print("published (%d bytes), waiting up to %ds for the ack..." % (len(payload), wait))
+
+    got = False
+    sock.settimeout(wait); deadline = time.time() + wait
+    while time.time() < deadline:
+        try:
+            t, b = _read_pkt(sock)
+        except (socket.timeout, ssl.SSLWantReadError):
+            break
+        if t is None:
+            break
+        if (t & 0xF0) == 0x30:
+            tlen = struct.unpack("!H", b[:2])[0]
+            topic = b[2:2+tlen].decode(errors="replace"); msg = b[2+tlen:]
+            rid, evs = decode_mesh_event(msg)
+            for kind, et, pl in evs:
+                if kind == "proprietary":
+                    print("\nACK  relay_id=%s  event_type=%s\n     payload=%r" %
+                          (rid, et, pl.decode(errors="replace")))
+                    got = True
+    try:
+        sock.sendall(bytes([0xE0, 0x00]))
+    except OSError:
+        pass
+    print("\n=> " + ("ack received, command executed." if got
+                     else "no ack within %ds (relay may be out of range / rebooting; check its journal)" % wait))
+    return 0 if got else 2
+
+# ---------------- config resolution ----------------
+def load_config(args):
+    cfg = {"broker": None, "user": None, "pass": None, "border_eui": None, "prefix": None}
+    # 3) config file
+    if args.config:
+        cp = configparser.ConfigParser()
+        if not cp.read(os.path.expanduser(args.config)):
+            sys.exit("error: cannot read --config %s" % args.config)
+        b = cp["broker"] if cp.has_section("broker") else {}
+        g = cp["gateway"] if cp.has_section("gateway") else {}
+        cfg.update(broker=b.get("url"), user=b.get("username"), **{"pass": b.get("password")})
+        cfg.update(border_eui=g.get("border_eui"), prefix=g.get("prefix"))
+    # 2) env vars override the file
+    for k, e in (("broker", "MESHCMD_BROKER"), ("user", "MESHCMD_USER"), ("pass", "MESHCMD_PASS"),
+                 ("border_eui", "MESHCMD_BORDER_EUI"), ("prefix", "MESHCMD_PREFIX")):
+        if os.environ.get(e):
+            cfg[k] = os.environ[e]
+    # 1) explicit CLI flags win
+    for k, a in (("broker", args.broker), ("user", args.user), ("pass", args.password),
+                 ("border_eui", args.border_eui), ("prefix", args.prefix)):
+        if a:
+            cfg[k] = a
+    # 0) --from-gateway: read the border's own rendered mqtt-config.toml
+    if args.from_gateway:
+        txt = open("/data/config/relay/mqtt-config.toml").read()
+        def g(key):
+            mm = re.search(r'(?m)^\s*%s\s*=\s*"?([^"\n]*)"?' % key, txt)
+            return mm.group(1) if mm else None
+        cfg["broker"] = cfg["broker"] or g("server")
+        cfg["user"] = cfg["user"] or g("username")
+        cfg["pass"] = cfg["pass"] or g("password")
+        cfg["prefix"] = cfg["prefix"] or g("topic_prefix")
+    return cfg
+
+def main():
+    p = argparse.ArgumentParser(description="Send a ChirpStack Gateway Mesh command to a relay.")
+    p.add_argument("--config"); p.add_argument("--broker"); p.add_argument("--user")
+    p.add_argument("--password"); p.add_argument("--border-eui", dest="border_eui")
+    p.add_argument("--prefix"); p.add_argument("--timeout", type=int, default=25)
+    p.add_argument("--from-gateway", action="store_true",
+                   help="read broker/creds/prefix from /data/config/relay/mqtt-config.toml (run on the Border)")
+    sub = p.add_subparsers(dest="cmd", required=True)
+    pr = sub.add_parser("reboot", help="reboot a relay (command type 128)")
+    pr.add_argument("relay_id")
+    ps = sub.add_parser("send", help="send an arbitrary proprietary command")
+    ps.add_argument("relay_id"); ps.add_argument("command_type", type=int)
+    ps.add_argument("payload_hex", nargs="?", default="")
+    sub.add_parser("list-commands", help="list known named command types")
+    args = p.parse_args()
+
+    if args.cmd == "list-commands":
+        for name, t in sorted(NAMED_COMMANDS.items(), key=lambda kv: kv[1]):
+            print("%3d  %s" % (t, name))
+        return 0
+
+    cfg = load_config(args)
+    missing = [k for k in ("broker", "border_eui", "prefix") if not cfg[k]]
+    if missing:
+        sys.exit("error: missing config: %s (set via --config / env / flags, or --from-gateway on the Border)"
+                 % ", ".join(missing))
+
+    if args.cmd == "reboot":
+        ctype, payload = NAMED_COMMANDS["reboot"], b""
+    else:
+        ctype = args.command_type
+        if not (128 <= ctype <= 255):
+            sys.exit("error: command_type must be 128-255 (proprietary range)")
+        payload = bytes.fromhex(args.payload_hex) if args.payload_hex else b""
+
+    relay_id = args.relay_id.lower()
+    pl = build_mesh_command(cfg["border_eui"], relay_id, ctype, payload)
+    cmd_topic = "%s/gateway/%s/command/mesh" % (cfg["prefix"], cfg["border_eui"])
+    evt_topic = "%s/gateway/%s/event/mesh" % (cfg["prefix"], cfg["border_eui"])
+    print("relay_id=%s command_type=%d payload=%s" % (relay_id, ctype, payload.hex() or "(empty)"))
+    return publish_and_wait(cfg["broker"], cfg["user"], cfg["pass"], cmd_topic, evt_topic, pl, args.timeout)
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        sys.exit(130)
+    except (OSError, ValueError) as e:
+        sys.exit("error: %s" % e)
