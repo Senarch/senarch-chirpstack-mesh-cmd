@@ -45,7 +45,11 @@ Environment variables: `MESHCMD_BROKER`, `MESHCMD_USER`, `MESHCMD_PASS`, `MESHCM
 # reboot a relay (command type 128), identified by its relay_id (last 4 bytes of its EUI)
 ./mesh-cmd --config mesh-cmd.conf reboot 11223344
 
-# send an arbitrary proprietary command (type + optional hex payload)
+# run a named command from the catalog (status, power, version, restart-stack, ...)
+./mesh-cmd --config mesh-cmd.conf run status  11223344
+./mesh-cmd --config mesh-cmd.conf run power   11223344
+
+# send an arbitrary proprietary command by number (type + optional hex payload)
 ./mesh-cmd --config mesh-cmd.conf send 11223344 129 0a
 
 # ask a relay which command types it actually has configured (mesh discovery)
