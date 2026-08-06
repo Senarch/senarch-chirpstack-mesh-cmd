@@ -235,6 +235,10 @@ def main():
     sub = p.add_subparsers(dest="cmd", required=True)
     pr = sub.add_parser("reboot", help="reboot a relay (named command from the catalog)")
     pr.add_argument("relay_id")
+    pp = sub.add_parser("ping", help="connectivity check: is the relay reachable over the mesh?")
+    pp.add_argument("relay_id")
+    ph = sub.add_parser("set-hop-count", help="set the relay's mesh max hop count (1-8), persisted")
+    ph.add_argument("relay_id"); ph.add_argument("hops", type=int)
     prun = sub.add_parser("run", help="send a named command from the catalog (e.g. status, power, version)")
     prun.add_argument("name"); prun.add_argument("relay_id"); prun.add_argument("payload_hex", nargs="?", default="")
     ps = sub.add_parser("send", help="send an arbitrary proprietary command by number")
@@ -268,8 +272,14 @@ def main():
 
     if args.cmd == "reboot":
         ctype, payload = named_type("reboot"), b""
+    elif args.cmd == "ping":
+        ctype, payload = named_type("ping"), b""
     elif args.cmd == "discover":
         ctype, payload = named_type("list-commands"), b""
+    elif args.cmd == "set-hop-count":
+        if not (1 <= args.hops <= 8):
+            sys.exit("error: hops must be 1-8 (mesh hop_count is 3 bits: 1..8)")
+        ctype, payload = named_type("set-hop-count"), str(args.hops).encode()
     elif args.cmd == "run":
         ctype = named_type(args.name)
         payload = bytes.fromhex(args.payload_hex) if args.payload_hex else b""

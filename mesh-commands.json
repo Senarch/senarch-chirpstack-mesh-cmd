@@ -14,6 +14,12 @@
       "params": []
     },
     {
+      "type": 150,
+      "name": "set-hop-count",
+      "description": "Set the mesh max hop count (1-8) and persist it.",
+      "params": [ { "name": "hops", "type": "int", "min": 1, "max": 8 } ]
+    },
+    {
       "type": 200,
       "name": "status",
       "description": "Compact health snapshot: uptime, load, temperature, memory, SenOS version.",
@@ -29,6 +35,12 @@
       "type": 202,
       "name": "version",
       "description": "Report the SenOS image version (fleet / upgrade tracking).",
+      "params": []
+    },
+    {
+      "type": 254,
+      "name": "ping",
+      "description": "Connectivity check: the relay replies 'pong' (the ack proves mesh reachability).",
       "params": []
     },
     {

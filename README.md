@@ -45,6 +45,12 @@ Environment variables: `MESHCMD_BROKER`, `MESHCMD_USER`, `MESHCMD_PASS`, `MESHCM
 # reboot a relay (command type 128), identified by its relay_id (last 4 bytes of its EUI)
 ./mesh-cmd --config mesh-cmd.conf reboot 11223344
 
+# is the relay reachable over the mesh? (relay replies "pong")
+./mesh-cmd --config mesh-cmd.conf ping 11223344
+
+# set the relay's mesh max hop count (1-8), persisted
+./mesh-cmd --config mesh-cmd.conf set-hop-count 11223344 3
+
 # run a named command from the catalog (status, power, version, restart-stack, ...)
 ./mesh-cmd --config mesh-cmd.conf run status  11223344
 ./mesh-cmd --config mesh-cmd.conf run power   11223344
