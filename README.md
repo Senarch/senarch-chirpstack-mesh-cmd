@@ -33,7 +33,7 @@ username = mesh-operator
 password = CHANGE_ME
 
 [gateway]
-border_eui = 0016c001f117f8d8     # the Border Gateway's EUI
+border_eui = 0016c001aabbccdd     # the Border Gateway's EUI
 prefix     = eu868                # MQTT topic prefix (the LNS region id)
 ```
 
@@ -43,35 +43,35 @@ Environment variables: `MESHCMD_BROKER`, `MESHCMD_USER`, `MESHCMD_PASS`, `MESHCM
 
 ```
 # reboot a relay (command type 128), identified by its relay_id (last 4 bytes of its EUI)
-./mesh-cmd --config mesh-cmd.conf reboot f117f28f
+./mesh-cmd --config mesh-cmd.conf reboot 11223344
 
 # send an arbitrary proprietary command (type + optional hex payload)
-./mesh-cmd --config mesh-cmd.conf send f117f28f 129 0a
+./mesh-cmd --config mesh-cmd.conf send 11223344 129 0a
 
 # list the named command types this tool knows
 ./mesh-cmd list-commands
 
 # all connection settings can be given as flags instead of a config file
 ./mesh-cmd --broker ssl://lns.example.net:8883 --user op --pass s3cret \
-           --border-eui 0016c001f117f8d8 --prefix eu868 reboot f117f28f
+           --border-eui 0016c001aabbccdd --prefix eu868 reboot 11223344
 ```
 
 On success it prints the relay's ack, e.g.:
 ```
-ACK  relay_id=f117f28f  event_type=128
+ACK  relay_id=11223344  event_type=128
      payload='ack: reboot scheduled in 5s\n'
 => ack received, command executed.
 ```
 
 If you run it **on the Border Gateway itself**, `--from-gateway` reads the broker, credentials and prefix from `/data/config/relay/mqtt-config.toml`:
 ```
-./mesh-cmd --from-gateway --border-eui 0016c001f117f8d8 reboot f117f28f
+./mesh-cmd --from-gateway --border-eui 0016c001aabbccdd reboot 11223344
 ```
 
 ## Finding the IDs
 
 - **`border_eui`** — the Border Gateway's EUI (in its LNS/gateway config, or its concentratord logs).
-- **`relay_id`** — the **last 4 bytes** of the Relay Gateway's EUI (e.g. EUI `0016c001f117f28f` → relay_id `f117f28f`). The Border also logs it when it relays that relay's traffic.
+- **`relay_id`** — the **last 4 bytes** of the Relay Gateway's EUI (e.g. EUI `0016c00111223344` → relay_id `11223344`). The Border also logs it when it relays that relay's traffic.
 - **`prefix`** — the MQTT topic prefix the Border publishes under (the LNS region id, e.g. `eu868`).
 
 ## Which commands can I send?

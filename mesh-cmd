@@ -13,10 +13,10 @@ On a Border Gateway itself, --from-gateway reads broker+creds+prefix from
 /data/config/relay/mqtt-config.toml.
 
 Examples:
-  mesh-cmd --config ~/.mesh-cmd.conf reboot f117f28f
+  mesh-cmd --config ~/.mesh-cmd.conf reboot 11223344
   mesh-cmd --broker ssl://lns.example.net:8883 --user op --pass s3cret \\
-           --border-eui 0016c001f117f8d8 --prefix eu868 reboot f117f28f
-  mesh-cmd --config ~/.mesh-cmd.conf send f117f28f 129 48656c6c6f   # type 129, payload "Hello"
+           --border-eui 0016c001aabbccdd --prefix eu868 reboot 11223344
+  mesh-cmd --config ~/.mesh-cmd.conf send 11223344 129 48656c6c6f   # type 129, payload "Hello"
 
 NOTE: the Border's mqtt-forwarder must be in protobuf mode (mqtt.json=false, the
 default) -- this tool publishes protobuf.

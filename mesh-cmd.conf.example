@@ -12,6 +12,6 @@ password = CHANGE_ME
 
 [gateway]
 # The Border Gateway's EUI (16 hex chars).
-border_eui = 0016c001f117f8d8
+border_eui = 0016c001aabbccdd
 # MQTT topic prefix = the LNS region id the Border publishes under (e.g. eu868, us915_1).
 prefix     = eu868
