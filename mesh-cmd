@@ -235,7 +235,9 @@ def main():
     sub = p.add_subparsers(dest="cmd", required=True)
     pr = sub.add_parser("reboot", help="reboot a relay (named command from the catalog)")
     pr.add_argument("relay_id")
-    ps = sub.add_parser("send", help="send an arbitrary proprietary command")
+    prun = sub.add_parser("run", help="send a named command from the catalog (e.g. status, power, version)")
+    prun.add_argument("name"); prun.add_argument("relay_id"); prun.add_argument("payload_hex", nargs="?", default="")
+    ps = sub.add_parser("send", help="send an arbitrary proprietary command by number")
     ps.add_argument("relay_id"); ps.add_argument("command_type", type=int)
     ps.add_argument("payload_hex", nargs="?", default="")
     sub.add_parser("list-commands", help="list the command types in the local catalog")
@@ -268,6 +270,9 @@ def main():
         ctype, payload = named_type("reboot"), b""
     elif args.cmd == "discover":
         ctype, payload = named_type("list-commands"), b""
+    elif args.cmd == "run":
+        ctype = named_type(args.name)
+        payload = bytes.fromhex(args.payload_hex) if args.payload_hex else b""
     else:  # send
         ctype = args.command_type
         if not (128 <= ctype <= 255):

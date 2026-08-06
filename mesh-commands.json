@@ -8,6 +8,30 @@
       "params": []
     },
     {
+      "type": 130,
+      "name": "restart-stack",
+      "description": "Soft-restart the mesh stack (concentratord + gateway-relay) without a full reboot.",
+      "params": []
+    },
+    {
+      "type": 200,
+      "name": "status",
+      "description": "Compact health snapshot: uptime, load, temperature, memory, SenOS version.",
+      "params": []
+    },
+    {
+      "type": 201,
+      "name": "power",
+      "description": "Charge-controller telemetry: battery, solar, state-of-charge, load (off-grid essentials).",
+      "params": []
+    },
+    {
+      "type": 202,
+      "name": "version",
+      "description": "Report the SenOS image version (fleet / upgrade tracking).",
+      "params": []
+    },
+    {
       "type": 255,
       "name": "list-commands",
       "description": "Report the command types this relay has configured (mesh discovery).",
