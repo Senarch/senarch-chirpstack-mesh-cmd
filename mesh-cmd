@@ -133,20 +133,23 @@ def _read_pkt(sock):
         buf += sock.recv(ln - len(buf))
     return h[0], buf
 
-def publish_and_wait(broker, user, pw, cmd_topic, evt_topic, payload, wait, show=True):
+def _mqtt_connect_subscribe(broker, user, pw, sub_topic):
+    """Open an MQTT 3.1.1 connection to `broker` and subscribe to `sub_topic`.
+    Returns the connected socket. Exits on a bad broker URL or CONNECT reject."""
     m = re.match(r'(tcp|ssl)://([^:/]+)(?::(\d+))?', broker)
     if not m:
         sys.exit("error: broker must be tcp://host[:port] or ssl://host[:port], got %r" % broker)
     scheme, host = m.group(1), m.group(2)
     port = int(m.group(3)) if m.group(3) else (8883 if scheme == "ssl" else 1883)
     print("broker=%s://%s:%d user=%r" % (scheme, host, port, user))
-    print("pub -> %s\nsub <- %s" % (cmd_topic, evt_topic))
 
     raw = socket.create_connection((host, port), timeout=15)
     sock = ssl.create_default_context().wrap_socket(raw, server_hostname=host) if scheme == "ssl" else raw
 
     vh = _s("MQTT") + bytes([4, 0xC2]) + struct.pack("!H", 30)   # clean + user + pass
-    body = vh + _s("mesh-cmd") + _s(user or "") + _s(pw or "")
+    # unique client id per process so a listener + a command can run at once
+    # without the broker booting one for a duplicate client id.
+    body = vh + _s("mesh-cmd-%d" % os.getpid()) + _s(user or "") + _s(pw or "")
     sock.sendall(bytes([0x10]) + _rl(len(body)) + body)
     t, b = _read_pkt(sock)
     if t != 0x20 or not b or b[1] != 0:
@@ -154,9 +157,14 @@ def publish_and_wait(broker, user, pw, cmd_topic, evt_topic, payload, wait, show
                  (hex(t) if t else "?", b[1] if b else "?"))
     print("connected.")
 
-    sock.sendall(bytes([0x82]) + _rl(len(struct.pack("!H", 1) + _s(evt_topic) + bytes([0]))) +
-                 struct.pack("!H", 1) + _s(evt_topic) + bytes([0]))
+    sub = struct.pack("!H", 1) + _s(sub_topic) + bytes([0])
+    sock.sendall(bytes([0x82]) + _rl(len(sub)) + sub)
     _read_pkt(sock)  # SUBACK
+    return sock
+
+def publish_and_wait(broker, user, pw, cmd_topic, evt_topic, payload, wait, show=True, expect_rid=None):
+    sock = _mqtt_connect_subscribe(broker, user, pw, evt_topic)
+    print("pub -> %s\nsub <- %s" % (cmd_topic, evt_topic))
 
     pub = _s(cmd_topic) + payload
     sock.sendall(bytes([0x30]) + _rl(len(pub)) + pub)
@@ -175,12 +183,16 @@ def publish_and_wait(broker, user, pw, cmd_topic, evt_topic, payload, wait, show
             tlen = struct.unpack("!H", b[:2])[0]
             msg = b[2+tlen:]
             rid, evs = decode_mesh_event(msg)
+            if expect_rid and rid != expect_rid:
+                continue   # ack for a different relay on the shared event topic
             for kind, et, pl in evs:
                 if kind == "proprietary":
                     events.append((et, pl))
                     if show:
                         print("\nACK  relay_id=%s  event_type=%s\n     payload=%r" %
                               (rid, et, pl.decode(errors="replace")))
+        if events:
+            break      # got our relay's ack -- no need to wait out the timeout
     try:
         sock.sendall(bytes([0xE0, 0x00]))
     except OSError:
@@ -189,6 +201,55 @@ def publish_and_wait(broker, user, pw, cmd_topic, evt_topic, payload, wait, show
         print("\n=> " + ("ack received, command executed." if events
                          else "no ack within %ds (relay may be out of range / rebooting; check its journal)" % wait))
     return (0 if events else 2), events
+
+def listen_for_relays(broker, user, pw, evt_topic, duration):
+    """Passively listen on the border's mesh event topic and collect the
+    relay_ids heard. Relays announce themselves via periodic heartbeats;
+    relayed uplinks also carry the originating relay_id. No command is sent.
+    Returns {relay_id: {"count", "last", "via"}}."""
+    print("listening on %s for %ds..." % (evt_topic, duration))
+    sock = _mqtt_connect_subscribe(broker, user, pw, evt_topic)
+    print("(relays announce on their heartbeat interval -- SenOS default 5m; ctrl-c to stop early)")
+
+    seen = {}
+    deadline = time.time() + duration
+    last_ping = time.time()
+    while time.time() < deadline:
+        sock.settimeout(min(5.0, max(0.1, deadline - time.time())))
+        try:
+            t, b = _read_pkt(sock)
+        except (socket.timeout, ssl.SSLWantReadError):
+            t, b = -1, None            # idle slice; fall through to keepalive
+        except OSError:
+            break
+        except KeyboardInterrupt:
+            print("  (stopped)")
+            break
+        if t is None:                  # broker closed the connection
+            break
+        if t != -1 and (t & 0xF0) == 0x30:   # PUBLISH
+            tlen = struct.unpack("!H", b[:2])[0]
+            rid, evs = decode_mesh_event(b[2+tlen:])
+            if rid:
+                rec = seen.setdefault(rid, {"count": 0, "last": 0.0, "via": set()})
+                rec["count"] += 1
+                rec["last"] = time.time()
+                for kind, _et, _pl in evs:
+                    rec["via"].add(kind)
+                if rec["count"] == 1:
+                    print("  + %s" % rid)
+        if time.time() - last_ping > 20:
+            try:
+                sock.sendall(bytes([0xC0, 0x00]))  # PINGREQ (stay under keepalive)
+            except OSError:
+                break
+            last_ping = time.time()
+
+    try:
+        sock.sendall(bytes([0xE0, 0x00]))          # DISCONNECT
+    except OSError:
+        pass
+    return seen
 
 # ---------------- config resolution ----------------
 def load_config(args):
@@ -247,6 +308,9 @@ def main():
     sub.add_parser("list-commands", help="list the command types in the local catalog")
     pd = sub.add_parser("discover", help="ask a relay which command types it has configured (mesh discovery)")
     pd.add_argument("relay_id")
+    prl = sub.add_parser("relays", help="list relay_ids the border is hearing (passive mesh discovery)")
+    prl.add_argument("--for", dest="for_seconds", type=int, default=330, metavar="SECONDS",
+                     help="seconds to listen (default 330 = one 5m heartbeat interval + margin)")
     args = p.parse_args()
 
     catalog = load_catalog(args.catalog)
@@ -262,6 +326,22 @@ def main():
     if missing:
         sys.exit("error: missing config: %s (set via --config / env / flags, or --from-gateway on the Border)"
                  % ", ".join(missing))
+
+    if args.cmd == "relays":
+        evt_topic = "%s/gateway/%s/event/mesh" % (cfg["prefix"], cfg["border_eui"])
+        seen = listen_for_relays(cfg["broker"], cfg["user"], cfg["pass"], evt_topic, args.for_seconds)
+        now = time.time()
+        if not seen:
+            print("\nno relays heard in %ds. Relays announce on their heartbeat interval --"
+                  " try a longer --for, or confirm the border is up." % args.for_seconds)
+            return 2
+        print("\nheard %d relay(s):" % len(seen))
+        print("%-10s %-11s %-5s %s" % ("RELAY_ID", "LAST_SEEN", "MSGS", "VIA"))
+        for rid, rec in sorted(seen.items(), key=lambda kv: -kv[1]["last"]):
+            print("%-10s %-11s %-5d %s" % (rid, "%ds ago" % int(now - rec["last"]),
+                                           rec["count"], ",".join(sorted(rec["via"])) or "-"))
+        print("\ntip: target one with e.g.  mesh-cmd --config <conf> discover <relay_id>")
+        return 0
 
     def named_type(name):
         match = [c for c in catalog if c["name"] == name]
@@ -297,7 +377,8 @@ def main():
 
     show = args.cmd != "discover"   # discover formats its own output below
     rc, events = publish_and_wait(cfg["broker"], cfg["user"], cfg["pass"],
-                                  cmd_topic, evt_topic, pl, args.timeout, show=show)
+                                  cmd_topic, evt_topic, pl, args.timeout, show=show,
+                                  expect_rid=relay_id)
 
     if args.cmd == "discover":
         resp = next((pl for et, pl in events if et == ctype), None)

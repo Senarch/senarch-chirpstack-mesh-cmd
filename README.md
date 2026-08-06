@@ -61,6 +61,11 @@ Environment variables: `MESHCMD_BROKER`, `MESHCMD_USER`, `MESHCMD_PASS`, `MESHCM
 # ask a relay which command types it actually has configured (mesh discovery)
 ./mesh-cmd --config mesh-cmd.conf discover 11223344
 
+# don't know the relay_ids? list every relay the Border is currently hearing
+# (passive -- sends nothing, no relay_id needed; listens ~one heartbeat interval)
+./mesh-cmd --config mesh-cmd.conf relays
+./mesh-cmd --config mesh-cmd.conf relays --for 120
+
 # list the command types in this tool's local catalog
 ./mesh-cmd list-commands
 
@@ -84,8 +89,27 @@ If you run it **on the Border Gateway itself**, `--from-gateway` reads the broke
 ## Finding the IDs
 
 - **`border_eui`** — the Border Gateway's EUI (in its LNS/gateway config, or its concentratord logs).
-- **`relay_id`** — the **last 4 bytes** of the Relay Gateway's EUI (e.g. EUI `0016c00111223344` → relay_id `11223344`). The Border also logs it when it relays that relay's traffic.
+- **`relay_id`** — the **last 4 bytes** of the Relay Gateway's EUI (e.g. EUI `0016c00111223344` → relay_id `11223344`). Don't have it? `mesh-cmd relays` lists every relay_id the Border is currently hearing — no ChirpStack needed (see below).
 - **`prefix`** — the MQTT topic prefix the Border publishes under (the LNS region id, e.g. `eu868`).
+
+## Discovering relay_ids
+
+You don't need ChirpStack (or any web UI) to find your relays. A Border Gateway continuously **hears** its relays: every relay emits a periodic *heartbeat* over the mesh, and every uplink a relay forwards is wrapped by the Border. The Border republishes all of it as `gw.MeshEvent` messages on `<prefix>/gateway/<border_eui>/event/mesh`, each stamped with the originating `relay_id`. (ChirpStack only knows your relays because it subscribes to this same stream.)
+
+`relays` subscribes to that topic and lists the relay_ids it hears — it sends nothing:
+
+```
+$ ./mesh-cmd --config mesh-cmd.conf relays
+listening on eu868/gateway/0016c001aabbccdd/event/mesh for 330s...
+connected.
+  + 11223344
+
+heard 1 relay(s):
+RELAY_ID   LAST_SEEN   MSGS  VIA
+11223344   78s ago     3     heartbeat,proprietary
+```
+
+`VIA` shows how the relay was heard (`heartbeat` and/or a relayed/`proprietary` event). Relays announce on their heartbeat interval (SenOS default **5 minutes**), so `relays` listens for 330s by default to catch each relay at least once. Shorten with `--for <seconds>` if the network also carries uplink traffic (relayed uplinks reveal a relay_id immediately). Then feed a discovered id into `discover` / `run status` / `run power`.
 
 ## Which commands can I send?
 
