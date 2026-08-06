@@ -1,0 +1,12 @@
+{
+  "_comment": "Catalog of SenArch SenOS mesh command types (proprietary range 128-255). Single source of truth for the meaning of each command type. Keep aligned with the SenOS image on your gateways. 'params' describe an optional command payload (reserved for future parameterised commands).",
+  "senos_min_version": "2.1.0",
+  "commands": [
+    {
+      "type": 128,
+      "name": "reboot",
+      "description": "Reboot the relay (re-opens the boot-time WiFi access window).",
+      "params": []
+    }
+  ]
+}

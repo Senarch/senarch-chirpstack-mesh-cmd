@@ -27,15 +27,36 @@ import os
 import re
 import socket
 import ssl
+import json
 import struct
 import sys
 import time
 
-# Friendly command-type names (128-255 are the proprietary range).
-NAMED_COMMANDS = {
-    "reboot": 128,
-    # "open-wifi": 129,   # planned (see gateway issue #387)
-}
+# Built-in fallback catalog, used only if mesh-commands.json cannot be found.
+# The bundled mesh-commands.json is the real source of truth (see load_catalog).
+BUILTIN_CATALOG = [
+    {"type": 128, "name": "reboot",
+     "description": "Reboot the relay (re-opens the boot-time WiFi access window).",
+     "params": []},
+]
+
+def load_catalog(explicit=None):
+    """Load the command catalog (list of {type,name,description,params}).
+    Search order: --catalog/arg > $MESHCMD_CATALOG > mesh-commands.json next to
+    this script > ./mesh-commands.json. Falls back to BUILTIN_CATALOG."""
+    candidates = [
+        explicit,
+        os.environ.get("MESHCMD_CATALOG"),
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "mesh-commands.json"),
+        "mesh-commands.json",
+    ]
+    for path in candidates:
+        if path and os.path.isfile(path):
+            with open(path) as f:
+                data = json.load(f)
+            cmds = data.get("commands", data) if isinstance(data, dict) else data
+            return [c for c in cmds if isinstance(c, dict) and "type" in c and "name" in c]
+    return BUILTIN_CATALOG
 
 # ---------------- protobuf: encode gw.MeshCommand ----------------
 def _uv(n):
@@ -208,18 +229,22 @@ def main():
     p.add_argument("--prefix"); p.add_argument("--timeout", type=int, default=25)
     p.add_argument("--from-gateway", action="store_true",
                    help="read broker/creds/prefix from /data/config/relay/mqtt-config.toml (run on the Border)")
+    p.add_argument("--catalog", help="path to mesh-commands.json (default: bundled next to this script)")
     sub = p.add_subparsers(dest="cmd", required=True)
-    pr = sub.add_parser("reboot", help="reboot a relay (command type 128)")
+    pr = sub.add_parser("reboot", help="reboot a relay (named command from the catalog)")
     pr.add_argument("relay_id")
     ps = sub.add_parser("send", help="send an arbitrary proprietary command")
     ps.add_argument("relay_id"); ps.add_argument("command_type", type=int)
     ps.add_argument("payload_hex", nargs="?", default="")
-    sub.add_parser("list-commands", help="list known named command types")
+    sub.add_parser("list-commands", help="list the command types in the catalog")
     args = p.parse_args()
 
+    catalog = load_catalog(args.catalog)
+
     if args.cmd == "list-commands":
-        for name, t in sorted(NAMED_COMMANDS.items(), key=lambda kv: kv[1]):
-            print("%3d  %s" % (t, name))
+        print("%-4s %-12s %s" % ("TYPE", "NAME", "DESCRIPTION"))
+        for c in sorted(catalog, key=lambda c: c["type"]):
+            print("%-4d %-12s %s" % (c["type"], c["name"], c.get("description", "")))
         return 0
 
     cfg = load_config(args)
@@ -229,7 +254,11 @@ def main():
                  % ", ".join(missing))
 
     if args.cmd == "reboot":
-        ctype, payload = NAMED_COMMANDS["reboot"], b""
+        match = [c for c in catalog if c["name"] == "reboot"]
+        if not match:
+            sys.exit("error: 'reboot' is not in the command catalog (%s)"
+                     % (args.catalog or "bundled mesh-commands.json"))
+        ctype, payload = match[0]["type"], b""
     else:
         ctype = args.command_type
         if not (128 <= ctype <= 255):
