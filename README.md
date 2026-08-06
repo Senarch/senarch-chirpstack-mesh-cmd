@@ -48,7 +48,10 @@ Environment variables: `MESHCMD_BROKER`, `MESHCMD_USER`, `MESHCMD_PASS`, `MESHCM
 # send an arbitrary proprietary command (type + optional hex payload)
 ./mesh-cmd --config mesh-cmd.conf send 11223344 129 0a
 
-# list the named command types this tool knows
+# ask a relay which command types it actually has configured (mesh discovery)
+./mesh-cmd --config mesh-cmd.conf discover 11223344
+
+# list the command types in this tool's local catalog
 ./mesh-cmd list-commands
 
 # all connection settings can be given as flags instead of a config file
@@ -76,12 +79,14 @@ If you run it **on the Border Gateway itself**, `--from-gateway` reads the broke
 
 ## Which commands can I send?
 
-The set of executable commands is defined **on the gateways**, not by this tool: each Relay maps command types to scripts in its ChirpStack Gateway Mesh config (`[commands.commands]`), which comes from the gateway firmware image. `mesh-cmd` only carries a **catalog** of the command types it knows about (see `list-commands`) — currently the SenArch SenOS built-ins (e.g. `128 = reboot`).
+The set of executable commands is defined **on the gateways**, not by this tool: each Relay maps command types to scripts in its ChirpStack Gateway Mesh config (`[commands.commands]`), which comes from the gateway firmware image. This tool carries a local **catalog** (`mesh-commands.json`, see `list-commands`) that gives each type a human-friendly name — currently the SenArch SenOS built-ins (`128 = reboot`, `255 = list-commands`).
 
-There is **no runtime capability discovery** in the mesh protocol — the tool cannot ask a relay "what commands do you support?" If you send a type a relay does **not** have configured, the relay ignores it and **no ack comes back** (the tool times out). So:
+Two ways to know what a relay supports:
 
-- Keep the tool's catalog **aligned with the SenOS image** running on your gateways.
-- A timeout with no ack usually means: the relay is out of range/rebooting, the mesh `root_key` doesn't match, or that command type isn't configured on that relay.
+- **`discover <relay_id>`** — asks the relay directly (via command `255 = list-commands`). The relay replies with the command types it actually has configured, and the tool labels them from the local catalog. This needs the relay to support `255` (SenOS 2.1.0+); older relays just time out.
+- **`list-commands`** — the tool's local catalog only (offline; may not match a given relay).
+
+If you send a type a relay does **not** have configured, the relay ignores it and **no ack comes back** (the tool times out). A timeout usually means: the relay is out of range/rebooting, the mesh `root_key` doesn't match, or that command type isn't configured on that relay.
 
 ## Security
 

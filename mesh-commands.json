@@ -7,6 +7,12 @@
       "name": "reboot",
       "description": "Reboot the relay (re-opens the boot-time WiFi access window).",
       "params": []
+    },
+    {
+      "type": 255,
+      "name": "list-commands",
+      "description": "Report the command types this relay has configured (mesh discovery).",
+      "params": []
     }
   ]
 }
