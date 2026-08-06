@@ -74,6 +74,15 @@ If you run it **on the Border Gateway itself**, `--from-gateway` reads the broke
 - **`relay_id`** — the **last 4 bytes** of the Relay Gateway's EUI (e.g. EUI `0016c001f117f28f` → relay_id `f117f28f`). The Border also logs it when it relays that relay's traffic.
 - **`prefix`** — the MQTT topic prefix the Border publishes under (the LNS region id, e.g. `eu868`).
 
+## Which commands can I send?
+
+The set of executable commands is defined **on the gateways**, not by this tool: each Relay maps command types to scripts in its ChirpStack Gateway Mesh config (`[commands.commands]`), which comes from the gateway firmware image. `mesh-cmd` only carries a **catalog** of the command types it knows about (see `list-commands`) — currently the SenArch SenOS built-ins (e.g. `128 = reboot`).
+
+There is **no runtime capability discovery** in the mesh protocol — the tool cannot ask a relay "what commands do you support?" If you send a type a relay does **not** have configured, the relay ignores it and **no ack comes back** (the tool times out). So:
+
+- Keep the tool's catalog **aligned with the SenOS image** running on your gateways.
+- A timeout with no ack usually means: the relay is out of range/rebooting, the mesh `root_key` doesn't match, or that command type isn't configured on that relay.
+
 ## Security
 
 Do **not** use a shared/full gateway credential. Give `mesh-cmd` a dedicated MQTT user restricted (by broker ACL) to just the command/event topics. Example mosquitto ACL:
