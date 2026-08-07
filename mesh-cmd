@@ -252,13 +252,28 @@ def listen_for_relays(broker, user, pw, evt_topic, duration):
     return seen
 
 # ---------------- config resolution ----------------
+def default_config_path():
+    """First existing mesh-cmd.conf, so `--config` is optional: $MESHCMD_CONFIG,
+    then the current directory, then next to this script, then the user config
+    dir. Returns None if none exist."""
+    home = os.path.expanduser("~")
+    for p in (os.environ.get("MESHCMD_CONFIG"),
+              "mesh-cmd.conf",
+              os.path.join(os.path.dirname(os.path.abspath(__file__)), "mesh-cmd.conf"),
+              os.path.join(home, ".config", "mesh-cmd", "mesh-cmd.conf"),
+              os.path.join(home, ".mesh-cmd.conf")):
+        if p and os.path.isfile(p):
+            return p
+    return None
+
 def load_config(args):
     cfg = {"broker": None, "user": None, "pass": None, "border_eui": None, "prefix": None}
-    # 3) config file
-    if args.config:
+    # 3) config file: explicit --config, else the first mesh-cmd.conf discovered
+    cfg_path = args.config or default_config_path()
+    if cfg_path:
         cp = configparser.ConfigParser()
-        if not cp.read(os.path.expanduser(args.config)):
-            sys.exit("error: cannot read --config %s" % args.config)
+        if not cp.read(os.path.expanduser(cfg_path)):
+            sys.exit("error: cannot read config %s" % cfg_path)
         b = cp["broker"] if cp.has_section("broker") else {}
         g = cp["gateway"] if cp.has_section("gateway") else {}
         cfg.update(broker=b.get("url"), user=b.get("username"), **{"pass": b.get("password")})
@@ -304,7 +319,7 @@ Commands:
   list-commands                  Print this tool's local command catalog
 
 Connection options (or set them in the --config file / environment):
-  --config <path>       INI file: [broker] url/username/password + [gateway] border_eui/prefix
+  --config <path>       INI file (optional -- auto-detected; see Config below)
   --broker <url>        ssl://host:port or tcp://host:port
   --user <name>         MQTT username
   --password <pass>     MQTT password
@@ -314,16 +329,18 @@ Connection options (or set them in the --config file / environment):
   --timeout <seconds>   Seconds to wait for a command ack (default 25)
   --catalog <path>      Use a specific mesh-commands.json
 
-Examples:
-  mesh-cmd --config mesh-cmd.conf relays
-  mesh-cmd --config mesh-cmd.conf discover 11223344
-  mesh-cmd --config mesh-cmd.conf reboot 11223344
-  mesh-cmd --config mesh-cmd.conf run power 11223344
-  mesh-cmd --config mesh-cmd.conf set-hop-count 11223344 3
+Examples (with a mesh-cmd.conf in the current directory):
+  mesh-cmd relays
+  mesh-cmd discover 11223344
+  mesh-cmd reboot 11223344
+  mesh-cmd run power 11223344
+  mesh-cmd set-hop-count 11223344 3
   mesh-cmd --broker ssl://lns.example.net:8883 --user op --pass s3cret \\
            --border-eui 0016c001aabbccdd --prefix eu868 ping 11223344
 
-Config resolution (highest priority first): CLI flags > environment variables > --config file.
+Config: a mesh-cmd.conf in the current dir (or next to this script, or
+~/.config/mesh-cmd/mesh-cmd.conf) is auto-loaded, so --config is optional.
+Resolution (highest first): CLI flags > environment variables > config file.
 
 Environment overrides:
   MESHCMD_BROKER
