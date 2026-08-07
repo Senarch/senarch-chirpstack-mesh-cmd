@@ -92,6 +92,42 @@ If you run it **on the Border Gateway itself**, `--from-gateway` reads the broke
 ./mesh-cmd --from-gateway --border-eui 0016c001aabbccdd reboot 11223344
 ```
 
+## The `send` escape hatch (raw commands)
+
+The named subcommands (`reboot`, `ping`, `open-wifi`, `run <name>`, …) are conveniences: each looks up a command **type** in the catalog and encodes the payload for you. `send` skips the catalog and fires **any** proprietary type (128–255) with a **raw payload** — use it to drive a command that isn't in the catalog yet, or to test the wire format directly.
+
+```
+mesh-cmd send <relay_id> <type> [payload_hex]
+```
+
+- **`<type>`** — the proprietary command number, 128–255. The relay only acts if it has that type mapped in its `[commands.commands]`; otherwise it ignores it and no ack comes back.
+- **`[payload_hex]`** — optional payload as **hex bytes**, delivered verbatim to the relay script's stdin. Omit it for a no-payload command.
+
+The payload is raw bytes, not text, so a command that reads an ASCII number needs the digits hex-encoded: `"3"` is byte `0x33` → `33`; `"30"` is `0x33 0x30` → `3330`.
+
+Each `send` below is exactly equivalent to the named subcommand next to it:
+```
+# ping (type 254, no payload)                     == ping 11223344
+./mesh-cmd send 11223344 254
+
+# set hop count to 3 (type 150, payload "3"=0x33)  == set-hop-count 11223344 3
+./mesh-cmd send 11223344 150 33
+
+# open WiFi for 30 min (type 129, payload "30")    == open-wifi 11223344 30
+./mesh-cmd send 11223344 129 3330
+
+# force WiFi off (type 130, no payload)            == close-wifi 11223344
+./mesh-cmd send 11223344 130
+
+# a type the relay does NOT have configured -> ignored, no ack, the tool times out
+./mesh-cmd send 11223344 199 0a
+```
+
+To hex-encode a short ASCII payload yourself:
+```
+printf '30' | xxd -p      # -> 3330
+```
+
 ## Finding the IDs
 
 - **`border_eui`** — the Border Gateway's EUI (in its LNS/gateway config, or its concentratord logs).

@@ -332,11 +332,22 @@ Connection options (or set them in the --config file / environment):
   --catalog <path>      Use a specific mesh-commands.json
 
 Examples (with a mesh-cmd.conf in the current directory):
-  mesh-cmd relays
-  mesh-cmd discover 11223344
-  mesh-cmd reboot 11223344
-  mesh-cmd run power 11223344
-  mesh-cmd set-hop-count 11223344 3
+  mesh-cmd relays                     # list relay_ids the Border is hearing
+  mesh-cmd discover 11223344          # which commands does this relay support?
+  mesh-cmd reboot 11223344            # reboot it
+  mesh-cmd ping 11223344              # reachable over the mesh? (-> pong)
+  mesh-cmd run power 11223344         # a catalog command by name (status/power/version)
+  mesh-cmd set-hop-count 11223344 3   # set the mesh max hop count
+  mesh-cmd open-wifi 11223344 30      # open WiFi 30 min (close-wifi to force off)
+
+  # 'send' fires a RAW proprietary type (128-255) with an optional hex-bytes
+  # payload piped to the relay script's stdin; an ASCII number is hex-encoded
+  # ("3" = 33, "30" = 3330). Each of these equals a named command above:
+  mesh-cmd send 11223344 254          # == ping            (no payload)
+  mesh-cmd send 11223344 150 33       # == set-hop-count 3  (payload "3")
+  mesh-cmd send 11223344 129 3330     # == open-wifi 30     (payload "30")
+
+  # connection settings can be given as flags instead of the config file:
   mesh-cmd --broker ssl://lns.example.net:8883 --user op --pass s3cret \\
            --border-eui 0016c001aabbccdd --prefix eu868 ping 11223344
 
