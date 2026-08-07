@@ -10,7 +10,7 @@ then prints the relay's ack (a gw.MeshEvent on <prefix>/gateway/<border_eui>/eve
 
 Config resolution (highest priority first): CLI flags > env vars > --config file.
 On a Border Gateway itself, --from-gateway reads broker+creds+prefix from
-/data/config/relay/mqtt-config.toml.
+/run/relay/mqtt-config.toml (older images: /data/config/relay).
 
 Examples:
   mesh-cmd --config ~/.mesh-cmd.conf reboot 11223344
@@ -288,9 +288,18 @@ def load_config(args):
                  ("border_eui", args.border_eui), ("prefix", args.prefix)):
         if a:
             cfg[k] = a
-    # 0) --from-gateway: read the border's own rendered mqtt-config.toml
+    # 0) --from-gateway: read the border's own rendered mqtt-config.toml. SenOS
+    # 2.1.0+ renders it to /run/relay; older images used /data/config/relay.
     if args.from_gateway:
-        txt = open("/data/config/relay/mqtt-config.toml").read()
+        txt = None
+        for _p in ("/run/relay/mqtt-config.toml", "/data/config/relay/mqtt-config.toml"):
+            try:
+                txt = open(_p).read(); break
+            except OSError:
+                continue
+        if txt is None:
+            sys.exit("error: --from-gateway: no mqtt-config.toml in /run/relay or "
+                     "/data/config/relay (run this on a Border gateway)")
         def g(key):
             mm = re.search(r'(?m)^\s*%s\s*=\s*"?([^"\n]*)"?' % key, txt)
             return mm.group(1) if mm else None
@@ -327,7 +336,7 @@ Connection options (or set them in the --config file / environment):
   --password <pass>     MQTT password
   --border-eui <eui>    Border Gateway EUI (16 hex chars)
   --prefix <id>         MQTT topic prefix / LNS region id (e.g. eu868)
-  --from-gateway        On the Border: read broker/creds/prefix from /data/config/relay/mqtt-config.toml
+  --from-gateway        On the Border: read broker/creds/prefix from /run/relay/mqtt-config.toml
   --timeout <seconds>   Seconds to wait for a command ack (default 25)
   --catalog <path>      Use a specific mesh-commands.json
 
@@ -380,7 +389,7 @@ def main():
     p.add_argument("--password"); p.add_argument("--border-eui", dest="border_eui")
     p.add_argument("--prefix"); p.add_argument("--timeout", type=int, default=25)
     p.add_argument("--from-gateway", action="store_true",
-                   help="read broker/creds/prefix from /data/config/relay/mqtt-config.toml (run on the Border)")
+                   help="read broker/creds/prefix from /run/relay/mqtt-config.toml (run on the Border)")
     p.add_argument("--catalog", help="path to mesh-commands.json (default: bundled next to this script)")
     sub = p.add_subparsers(dest="cmd", required=True)
     pr = sub.add_parser("reboot", help="reboot a relay (named command from the catalog)")
