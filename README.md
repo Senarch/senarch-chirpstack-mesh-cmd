@@ -23,7 +23,9 @@ cp mesh-cmd.conf.example mesh-cmd.conf   # then edit it
 
 ## Configure
 
-Settings resolve in this order (highest first): **CLI flags > environment variables > `--config` file**.
+Settings resolve in this order (highest first): **CLI flags > environment variables > config file**.
+
+`--config` is **optional**: if omitted, `mesh-cmd` auto-loads the first `mesh-cmd.conf` it finds — the current directory, then next to the script, then `~/.config/mesh-cmd/mesh-cmd.conf`, then `~/.mesh-cmd.conf` (override the search with `$MESHCMD_CONFIG`). So from the repo directory you can just run `./mesh-cmd relays`.
 
 `mesh-cmd.conf` (INI):
 ```ini
