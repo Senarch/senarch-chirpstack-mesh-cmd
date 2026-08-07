@@ -50,6 +50,18 @@
       "params": []
     },
     {
+      "type": 203,
+      "name": "gps-fix",
+      "description": "Acquire a GPS fix (payload = minutes, default 70, max 90) and persist the relay location; acks immediately, poll with gps-status.",
+      "params": [ { "name": "minutes", "type": "int", "min": 1, "max": 90 } ]
+    },
+    {
+      "type": 204,
+      "name": "gps-status",
+      "description": "Report GPS acquisition status (state/elapsed/remaining/sats) and the persisted location.",
+      "params": []
+    },
+    {
       "type": 254,
       "name": "ping",
       "description": "Connectivity check: the relay replies 'pong' (the ack proves mesh reachability).",

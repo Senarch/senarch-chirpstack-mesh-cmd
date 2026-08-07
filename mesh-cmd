@@ -323,6 +323,8 @@ Commands:
   set-hop-count <relay_id> <n>   Set the mesh max hop count (1-8) and persist it
   open-wifi <relay_id> [min]     Open the relay's WiFi window for N minutes (default 30)
   close-wifi <relay_id>          Force the relay's WiFi off now
+  gps-fix <relay_id> [min]       Acquire a GPS fix (default 70, max 90) and persist the location
+  gps-status <relay_id>          Report GPS acquisition status + the persisted location
   run <name> <relay_id> [hex]    Run a named catalog command (status, power, version, restart-stack)
   discover <relay_id>            Ask a relay which command types it has configured
   relays                         List relay_ids the Border is hearing (passive; no relay_id needed)
@@ -348,6 +350,8 @@ Examples (with a mesh-cmd.conf in the current directory):
   mesh-cmd run power 11223344         # a catalog command by name (status/power/version)
   mesh-cmd set-hop-count 11223344 3   # set the mesh max hop count
   mesh-cmd open-wifi 11223344 30      # open WiFi 30 min (close-wifi to force off)
+  mesh-cmd gps-fix 11223344           # acquire a GPS fix (default 70 min); poll with gps-status
+  mesh-cmd gps-status 11223344        # GPS progress + the persisted location
 
   # 'send' fires a RAW proprietary type (128-255) with an optional hex-bytes
   # payload piped to the relay script's stdin; an ASCII number is hex-encoded
@@ -402,6 +406,10 @@ def main():
     po.add_argument("relay_id"); po.add_argument("minutes", type=int, nargs="?", default=None)
     pc = sub.add_parser("close-wifi", help="force the relay's WiFi off now")
     pc.add_argument("relay_id")
+    pgf = sub.add_parser("gps-fix", help="acquire a GPS fix and persist the relay location (default 70 min, max 90)")
+    pgf.add_argument("relay_id"); pgf.add_argument("minutes", type=int, nargs="?", default=None)
+    pgs = sub.add_parser("gps-status", help="report the relay's GPS acquisition status + persisted location")
+    pgs.add_argument("relay_id")
     prun = sub.add_parser("run", help="send a named command from the catalog (e.g. status, power, version)")
     prun.add_argument("name"); prun.add_argument("relay_id"); prun.add_argument("payload_hex", nargs="?", default="")
     ps = sub.add_parser("send", help="send an arbitrary proprietary command by number")
@@ -469,6 +477,13 @@ def main():
         ctype = named_type("open-wifi")
     elif args.cmd == "close-wifi":
         ctype, payload = named_type("close-wifi"), b""
+    elif args.cmd == "gps-fix":
+        if args.minutes is not None and not (1 <= args.minutes <= 90):
+            sys.exit("error: minutes must be 1-90 (or omit for the relay default of 70)")
+        payload = str(args.minutes).encode() if args.minutes is not None else b""
+        ctype = named_type("gps-fix")
+    elif args.cmd == "gps-status":
+        ctype, payload = named_type("gps-status"), b""
     elif args.cmd == "run":
         ctype = named_type(args.name)
         payload = bytes.fromhex(args.payload_hex) if args.payload_hex else b""

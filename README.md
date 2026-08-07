@@ -57,6 +57,11 @@ Environment variables: `MESHCMD_BROKER`, `MESHCMD_USER`, `MESHCMD_PASS`, `MESHCM
 ./mesh-cmd --config mesh-cmd.conf open-wifi 11223344 30
 ./mesh-cmd --config mesh-cmd.conf close-wifi 11223344
 
+# acquire a GPS fix and persist the relay's location (default 70 min, max 90);
+# acks immediately, then poll progress + the persisted location with gps-status
+./mesh-cmd --config mesh-cmd.conf gps-fix    11223344
+./mesh-cmd --config mesh-cmd.conf gps-status 11223344
+
 # run a named command from the catalog (status, power, version, restart-stack, ...)
 ./mesh-cmd --config mesh-cmd.conf run status  11223344
 ./mesh-cmd --config mesh-cmd.conf run power   11223344
