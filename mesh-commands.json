@@ -8,7 +8,19 @@
       "params": []
     },
     {
+      "type": 129,
+      "name": "open-wifi",
+      "description": "Open the relay's WiFi access window for N minutes (default 30, max 720), no reboot.",
+      "params": [ { "name": "minutes", "type": "int", "min": 1, "max": 720 } ]
+    },
+    {
       "type": 130,
+      "name": "close-wifi",
+      "description": "Force the relay's WiFi off now (inverse of open-wifi).",
+      "params": []
+    },
+    {
+      "type": 131,
       "name": "restart-stack",
       "description": "Soft-restart the mesh stack (concentratord + gateway-relay) without a full reboot.",
       "params": []

@@ -16,7 +16,7 @@ Examples:
   mesh-cmd --config ~/.mesh-cmd.conf reboot 11223344
   mesh-cmd --broker ssl://lns.example.net:8883 --user op --pass s3cret \\
            --border-eui 0016c001aabbccdd --prefix eu868 reboot 11223344
-  mesh-cmd --config ~/.mesh-cmd.conf send 11223344 129 48656c6c6f   # type 129, payload "Hello"
+  mesh-cmd --config ~/.mesh-cmd.conf send 11223344 199 48656c6c6f   # type 199, payload "Hello"
 
 NOTE: the Border's mqtt-forwarder must be in protobuf mode (mqtt.json=false, the
 default) -- this tool publishes protobuf.
@@ -312,6 +312,8 @@ Commands:
   reboot <relay_id>              Reboot the relay (re-opens the boot-time WiFi window)
   ping <relay_id>                Connectivity check -- the relay replies "pong"
   set-hop-count <relay_id> <n>   Set the mesh max hop count (1-8) and persist it
+  open-wifi <relay_id> [min]     Open the relay's WiFi window for N minutes (default 30)
+  close-wifi <relay_id>          Force the relay's WiFi off now
   run <name> <relay_id> [hex]    Run a named catalog command (status, power, version, restart-stack)
   discover <relay_id>            Ask a relay which command types it has configured
   relays                         List relay_ids the Border is hearing (passive; no relay_id needed)
@@ -376,6 +378,10 @@ def main():
     pp.add_argument("relay_id")
     ph = sub.add_parser("set-hop-count", help="set the relay's mesh max hop count (1-8), persisted")
     ph.add_argument("relay_id"); ph.add_argument("hops", type=int)
+    po = sub.add_parser("open-wifi", help="open the relay's WiFi window for N minutes (default 30)")
+    po.add_argument("relay_id"); po.add_argument("minutes", type=int, nargs="?", default=None)
+    pc = sub.add_parser("close-wifi", help="force the relay's WiFi off now")
+    pc.add_argument("relay_id")
     prun = sub.add_parser("run", help="send a named command from the catalog (e.g. status, power, version)")
     prun.add_argument("name"); prun.add_argument("relay_id"); prun.add_argument("payload_hex", nargs="?", default="")
     ps = sub.add_parser("send", help="send an arbitrary proprietary command by number")
@@ -436,6 +442,13 @@ def main():
         if not (1 <= args.hops <= 8):
             sys.exit("error: hops must be 1-8 (mesh hop_count is 3 bits: 1..8)")
         ctype, payload = named_type("set-hop-count"), str(args.hops).encode()
+    elif args.cmd == "open-wifi":
+        if args.minutes is not None and not (1 <= args.minutes <= 720):
+            sys.exit("error: minutes must be 1-720 (or omit for the relay default of 30)")
+        payload = str(args.minutes).encode() if args.minutes is not None else b""
+        ctype = named_type("open-wifi")
+    elif args.cmd == "close-wifi":
+        ctype, payload = named_type("close-wifi"), b""
     elif args.cmd == "run":
         ctype = named_type(args.name)
         payload = bytes.fromhex(args.payload_hex) if args.payload_hex else b""

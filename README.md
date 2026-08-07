@@ -53,12 +53,16 @@ Environment variables: `MESHCMD_BROKER`, `MESHCMD_USER`, `MESHCMD_PASS`, `MESHCM
 # set the relay's mesh max hop count (1-8), persisted
 ./mesh-cmd --config mesh-cmd.conf set-hop-count 11223344 3
 
+# open a mesh-only relay's WiFi window for N minutes (default 30) to reach it, then close it
+./mesh-cmd --config mesh-cmd.conf open-wifi 11223344 30
+./mesh-cmd --config mesh-cmd.conf close-wifi 11223344
+
 # run a named command from the catalog (status, power, version, restart-stack, ...)
 ./mesh-cmd --config mesh-cmd.conf run status  11223344
 ./mesh-cmd --config mesh-cmd.conf run power   11223344
 
 # send an arbitrary proprietary command by number (type + optional hex payload)
-./mesh-cmd --config mesh-cmd.conf send 11223344 129 0a
+./mesh-cmd --config mesh-cmd.conf send 11223344 199 0a
 
 # ask a relay which command types it actually has configured (mesh discovery)
 ./mesh-cmd --config mesh-cmd.conf discover 11223344
