@@ -285,8 +285,67 @@ def load_config(args):
         cfg["prefix"] = cfg["prefix"] or g("topic_prefix")
     return cfg
 
+PROG = "mesh-cmd"
+
+def print_usage(file=None):
+    (file or sys.stdout).write("""mesh-cmd - send ChirpStack Gateway Mesh commands to a relay over MQTT
+
+Usage:
+  mesh-cmd [connection options] <command> [arguments]
+
+Commands:
+  reboot <relay_id>              Reboot the relay (re-opens the boot-time WiFi window)
+  ping <relay_id>                Connectivity check -- the relay replies "pong"
+  set-hop-count <relay_id> <n>   Set the mesh max hop count (1-8) and persist it
+  run <name> <relay_id> [hex]    Run a named catalog command (status, power, version, restart-stack)
+  discover <relay_id>            Ask a relay which command types it has configured
+  relays                         List relay_ids the Border is hearing (passive; no relay_id needed)
+  send <relay_id> <type> [hex]   Send a raw proprietary command (128-255) + optional hex payload
+  list-commands                  Print this tool's local command catalog
+
+Connection options (or set them in the --config file / environment):
+  --config <path>       INI file: [broker] url/username/password + [gateway] border_eui/prefix
+  --broker <url>        ssl://host:port or tcp://host:port
+  --user <name>         MQTT username
+  --password <pass>     MQTT password
+  --border-eui <eui>    Border Gateway EUI (16 hex chars)
+  --prefix <id>         MQTT topic prefix / LNS region id (e.g. eu868)
+  --from-gateway        On the Border: read broker/creds/prefix from /data/config/relay/mqtt-config.toml
+  --timeout <seconds>   Seconds to wait for a command ack (default 25)
+  --catalog <path>      Use a specific mesh-commands.json
+
+Examples:
+  mesh-cmd --config mesh-cmd.conf relays
+  mesh-cmd --config mesh-cmd.conf discover 11223344
+  mesh-cmd --config mesh-cmd.conf reboot 11223344
+  mesh-cmd --config mesh-cmd.conf run power 11223344
+  mesh-cmd --config mesh-cmd.conf set-hop-count 11223344 3
+  mesh-cmd --broker ssl://lns.example.net:8883 --user op --pass s3cret \\
+           --border-eui 0016c001aabbccdd --prefix eu868 ping 11223344
+
+Config resolution (highest priority first): CLI flags > environment variables > --config file.
+
+Environment overrides:
+  MESHCMD_BROKER
+  MESHCMD_USER
+  MESHCMD_PASS
+  MESHCMD_BORDER_EUI
+  MESHCMD_PREFIX
+  MESHCMD_CATALOG
+""")
+
+class UsageParser(argparse.ArgumentParser):
+    # Any bad usage prints our block (like the Go CLI's printUsage), not argparse's.
+    def error(self, message):
+        print_usage(sys.stderr)
+        sys.stderr.write("\nerror: %s\n" % message)
+        sys.exit(2)
+
 def main():
-    p = argparse.ArgumentParser(description="Send a ChirpStack Gateway Mesh command to a relay.")
+    if len(sys.argv) == 1 or sys.argv[1] == "help" or any(a in ("-h", "--help") for a in sys.argv[1:]):
+        print_usage()
+        return 0
+    p = UsageParser(prog=PROG, add_help=False)
     p.add_argument("--config"); p.add_argument("--broker"); p.add_argument("--user")
     p.add_argument("--password"); p.add_argument("--border-eui", dest="border_eui")
     p.add_argument("--prefix"); p.add_argument("--timeout", type=int, default=25)
