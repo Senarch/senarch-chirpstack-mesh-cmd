@@ -87,7 +87,7 @@ ACK  relay_id=11223344  event_type=128
 => ack received, command executed.
 ```
 
-If you run it **on the Border Gateway itself**, `--from-gateway` reads the broker, credentials and prefix from `/data/config/relay/mqtt-config.toml`:
+If you run it **on the Border Gateway itself**, `--from-gateway` reads the broker, credentials and prefix from `/run/relay/mqtt-config.toml` (older images: `/data/config/relay/mqtt-config.toml`):
 ```
 ./mesh-cmd --from-gateway --border-eui 0016c001aabbccdd reboot 11223344
 ```
