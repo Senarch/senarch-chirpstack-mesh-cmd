@@ -6,6 +6,30 @@ ChirpStack Gateway Mesh supports proprietary commands (types 128–255) that a *
 
 It is a single Python file using **only the standard library** (no `pip install`), so it runs on any machine with `python3` that can reach the MQTT broker.
 
+## Two transports
+
+| | Where you run it | Needs | Use when |
+|---|---|---|---|
+| **MQTT** (default) | anywhere with broker access | nothing beyond `python3` | normal remote operation |
+| **`--local`** | on the Border itself | `pyzmq` | the Border has no MQTT forwarder |
+
+`--local` skips the broker entirely and speaks to `chirpstack-gateway-mesh`'s proxy API over ZMQ, the same socket `chirpstack-mqtt-forwarder` uses (`gw.Command{mesh=5}` on `ipc:///tmp/gateway_relay_command`). MQTT was only ever the transport that carried the request to the gateway.
+
+That matters because a Border forwarding to a non-ChirpStack LNS — TTN over Semtech UDP, say — runs no MQTT forwarder at all, so the MQTT path has nothing to deliver to (Senarch/gateway-with-yocto#424). `--local` keeps relay management working under any egress.
+
+It also needs no configuration: the Border's own EUI is read from `gateway-mesh` directly, so there is no broker, no credentials and no topic prefix to supply.
+
+```bash
+# on the Border, over SSH or WireGuard
+senarch-mesh-cmd --local ping <relay_id>
+senarch-mesh-cmd --local relays --for 330
+senarch-mesh-cmd --local gps-status <relay_id>
+```
+
+Note `--from-gateway` also runs on the Border, but still goes out to the broker and back, so it needs `mqtt-forwarder` running. `--local` does not.
+
+On SenOS the tool ships as the `senarch-mesh-cmd` package with `pyzmq` included, and appears in `senarch-help`.
+
 ## Requirements
 
 - `python3` (3.6+)

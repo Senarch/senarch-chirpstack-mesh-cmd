@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """mesh-cmd - send a ChirpStack Gateway Mesh proprietary command to a relay.
 
+Two transports, same commands:
+  default   MQTT to the Border's broker -- run from anywhere, stdlib only.
+  --local   ZMQ straight to gateway-mesh -- run ON the Border, no broker,
+            no credentials, and works whatever the LNS egress is (needs pyzmq).
+
 Pure Python standard library (socket + ssl only) -- no pip installs. Runs from
 any machine that can reach the MQTT broker the Border Gateway is connected to.
 
@@ -251,6 +256,141 @@ def listen_for_relays(broker, user, pw, evt_topic, duration):
         pass
     return seen
 
+# ---------------- local transport: ZMQ to gateway-mesh ----------------
+# On the Border itself no broker is needed. MQTT is only how the request reaches
+# the gateway: chirpstack-mqtt-forwarder decodes the payload and hands it to
+# chirpstack-gateway-mesh's proxy API as gw.Command{mesh=5} over ZMQ. --local
+# talks to that socket directly, so relay management keeps working on a border
+# that forwards to a non-ChirpStack LNS over Semtech UDP and runs no MQTT
+# forwarder at all (Senarch/gateway-with-yocto#424).
+#
+# --from-gateway also runs on the Border, but still goes out to the broker and
+# back, so it needs mqtt-forwarder running. --local does not.
+
+LOCAL_COMMAND_URL = os.environ.get("MESHCMD_COMMAND_URL", "ipc:///tmp/gateway_relay_command")
+LOCAL_EVENT_URL = os.environ.get("MESHCMD_EVENT_URL", "ipc:///tmp/gateway_relay_event")
+
+_zmq = None
+def _load_zmq():
+    """Imported lazily so the tool stays stdlib-only for remote (MQTT) use."""
+    global _zmq
+    if _zmq is None:
+        try:
+            import zmq
+        except ImportError:
+            sys.exit("error: --local needs pyzmq (SenOS: it ships with the senarch-mesh-cmd package;\n"
+                     "       elsewhere: pip install pyzmq). Remote MQTT mode needs no extra packages.")
+        _zmq = zmq
+    return _zmq
+
+def _wrap_command(field, body):
+    """gw.Command oneof: send_downlink_frame=1, set_gateway_configuration=2,
+    get_gateway_id=3, get_location=4, mesh=5."""
+    return _ld(field, body)
+
+def decode_event_mesh(b):
+    """gw.Event{mesh=3} -> (relay_id, events). The ZMQ event socket carries the
+    Event wrapper; the MQTT event topic carries a bare MeshEvent."""
+    for f, wt, v in _fields(b):
+        if f == 3 and wt == 2:
+            return decode_mesh_event(v)
+    return None, []
+
+def _zmq_req(payload, timeout_ms=5000):
+    """One REQ/REP round trip on a fresh socket. A REQ that never read its reply
+    is stuck in EFSM for any later send, so the socket is not reused."""
+    zmq = _load_zmq()
+    sock = zmq.Context.instance().socket(zmq.REQ)
+    sock.setsockopt(zmq.LINGER, 0)
+    sock.setsockopt(zmq.RCVTIMEO, timeout_ms)
+    sock.setsockopt(zmq.SNDTIMEO, timeout_ms)
+    sock.connect(LOCAL_COMMAND_URL)
+    try:
+        sock.send(payload)
+        return sock.recv()
+    except zmq.Again:
+        sys.exit("error: no reply from gateway-mesh on %s\n"
+                 "       run this on a Border gateway with gateway-relay.service active"
+                 % LOCAL_COMMAND_URL)
+    finally:
+        sock.close()
+
+def local_border_eui():
+    """Ask gateway-mesh for the border's own EUI, so --local needs no config."""
+    for f, wt, v in _fields(_zmq_req(_wrap_command(3, b""))):
+        if f == 1 and wt == 2:
+            return v.decode(errors="replace")
+    return None
+
+def _local_sub():
+    zmq = _load_zmq()
+    sock = zmq.Context.instance().socket(zmq.SUB)
+    sock.setsockopt(zmq.LINGER, 0)
+    sock.setsockopt_string(zmq.SUBSCRIBE, "")
+    sock.connect(LOCAL_EVENT_URL)
+    return sock
+
+def local_send_and_wait(payload, wait, show=True, expect_rid=None):
+    """--local equivalent of publish_and_wait(). Same (rc, events) contract."""
+    sub = _local_sub()
+    print("cmd -> %s\nevt <- %s" % (LOCAL_COMMAND_URL, LOCAL_EVENT_URL))
+
+    # Subscribe before sending: a fast relay could otherwise ack before we are
+    # listening. The REQ reply is an empty frame -- it only means the border
+    # accepted the command for relaying; the real ack arrives over LoRa.
+    _zmq_req(_wrap_command(5, payload))
+    print("sent (%d bytes), waiting up to %ds for the ack..." % (len(payload), wait))
+
+    events = []
+    deadline = time.time() + wait
+    while time.time() < deadline:
+        remaining = max(0, int((deadline - time.time()) * 1000))
+        if not sub.poll(remaining):
+            break
+        rid, evs = decode_event_mesh(sub.recv())
+        if expect_rid and rid and rid.lower() != expect_rid.lower():
+            continue
+        for kind, et, pl in evs:
+            if kind == "proprietary":
+                events.append((et, pl))
+                if show:
+                    print("\nACK  relay_id=%s  event_type=%s\n     payload=%r" %
+                          (rid, et, pl.decode(errors="replace")))
+        if events:
+            break
+    sub.close()
+    if show:
+        print("\n=> " + ("ack received, command executed." if events
+                         else "no ack within %ds (relay may be out of range / rebooting; check its journal)" % wait))
+    return (0 if events else 2), events
+
+def local_listen_for_relays(duration):
+    """--local equivalent of listen_for_relays()."""
+    print("listening on %s for %ds..." % (LOCAL_EVENT_URL, duration))
+    print("(relays announce on their heartbeat interval -- SenOS default 5m; ctrl-c to stop early)")
+    sub = _local_sub()
+    seen = {}
+    deadline = time.time() + duration
+    try:
+        while time.time() < deadline:
+            remaining = max(0, int((deadline - time.time()) * 1000))
+            if not sub.poll(remaining):
+                continue
+            rid, evs = decode_event_mesh(sub.recv())
+            if not rid:
+                continue
+            rec = seen.setdefault(rid, {"count": 0, "last": 0.0, "via": set()})
+            rec["count"] += 1
+            rec["last"] = time.time()
+            for kind, _et, _pl in evs:
+                rec["via"].add(kind)
+            if rec["count"] == 1:
+                print("  + %s" % rid)
+    except KeyboardInterrupt:
+        print("  (stopped)")
+    sub.close()
+    return seen
+
 # ---------------- config resolution ----------------
 def default_config_path():
     """First existing mesh-cmd.conf, so `--config` is optional: $MESHCMD_CONFIG,
@@ -312,7 +452,10 @@ def load_config(args):
 PROG = "mesh-cmd"
 
 def print_usage(file=None):
-    (file or sys.stdout).write("""mesh-cmd - send ChirpStack Gateway Mesh commands to a relay over MQTT
+    (file or sys.stdout).write("""mesh-cmd - send ChirpStack Gateway Mesh commands to a relay
+
+Transports: MQTT to the Border's broker (default), or --local to talk to
+gateway-mesh directly over ZMQ when running on the Border itself.
 
 Usage:
   mesh-cmd [connection options] <command> [arguments]
@@ -338,6 +481,8 @@ Connection options (or set them in the --config file / environment):
   --password <pass>     MQTT password
   --border-eui <eui>    Border Gateway EUI (16 hex chars)
   --prefix <id>         MQTT topic prefix / LNS region id (e.g. eu868)
+  --local               On the Border: talk to gateway-mesh directly over ZMQ (no broker,
+                        no credentials, works with any LNS egress -- needs pyzmq)
   --from-gateway        On the Border: read broker/creds/prefix from /run/relay/mqtt-config.toml
   --timeout <seconds>   Seconds to wait for a command ack (default 25)
   --catalog <path>      Use a specific mesh-commands.json
@@ -392,6 +537,9 @@ def main():
     p.add_argument("--config"); p.add_argument("--broker"); p.add_argument("--user")
     p.add_argument("--password"); p.add_argument("--border-eui", dest="border_eui")
     p.add_argument("--prefix"); p.add_argument("--timeout", type=int, default=25)
+    p.add_argument("--local", action="store_true",
+                   help="talk to gateway-mesh over ZMQ instead of MQTT (run on the Border; "
+                        "works with any LNS egress, needs no broker)")
     p.add_argument("--from-gateway", action="store_true",
                    help="read broker/creds/prefix from /run/relay/mqtt-config.toml (run on the Border)")
     p.add_argument("--catalog", help="path to mesh-commands.json (default: bundled next to this script)")
@@ -431,15 +579,28 @@ def main():
             print("%-4d %-12s %s" % (c["type"], c["name"], c.get("description", "")))
         return 0
 
-    cfg = load_config(args)
-    missing = [k for k in ("broker", "border_eui", "prefix") if not cfg[k]]
-    if missing:
-        sys.exit("error: missing config: %s (set via --config / env / flags, or --from-gateway on the Border)"
-                 % ", ".join(missing))
+    if args.local:
+        # No broker, no topics, no credentials. The only thing still needed is
+        # the border's own EUI, which gateway-mesh can be asked for directly.
+        cfg = {"broker": None, "user": None, "pass": None, "prefix": None,
+               "border_eui": (args.border_eui or "").lower() or None}
+        if not cfg["border_eui"]:
+            cfg["border_eui"] = local_border_eui()
+            if not cfg["border_eui"]:
+                sys.exit("error: could not read the border gateway id from gateway-mesh")
+    else:
+        cfg = load_config(args)
+        missing = [k for k in ("broker", "border_eui", "prefix") if not cfg[k]]
+        if missing:
+            sys.exit("error: missing config: %s (set via --config / env / flags, --from-gateway, "
+                     "or --local on the Border)" % ", ".join(missing))
 
     if args.cmd == "relays":
-        evt_topic = "%s/gateway/%s/event/mesh" % (cfg["prefix"], cfg["border_eui"])
-        seen = listen_for_relays(cfg["broker"], cfg["user"], cfg["pass"], evt_topic, args.for_seconds)
+        if args.local:
+            seen = local_listen_for_relays(args.for_seconds)
+        else:
+            evt_topic = "%s/gateway/%s/event/mesh" % (cfg["prefix"], cfg["border_eui"])
+            seen = listen_for_relays(cfg["broker"], cfg["user"], cfg["pass"], evt_topic, args.for_seconds)
         now = time.time()
         if not seen:
             print("\nno relays heard in %ds. Relays announce on their heartbeat interval --"
@@ -495,14 +656,18 @@ def main():
 
     relay_id = args.relay_id.lower()
     pl = build_mesh_command(cfg["border_eui"], relay_id, ctype, payload)
-    cmd_topic = "%s/gateway/%s/command/mesh" % (cfg["prefix"], cfg["border_eui"])
-    evt_topic = "%s/gateway/%s/event/mesh" % (cfg["prefix"], cfg["border_eui"])
-    print("relay_id=%s command_type=%d payload=%s" % (relay_id, ctype, payload.hex() or "(empty)"))
+    print("border_eui=%s relay_id=%s command_type=%d payload=%s"
+          % (cfg["border_eui"], relay_id, ctype, payload.hex() or "(empty)"))
 
     show = args.cmd != "discover"   # discover formats its own output below
-    rc, events = publish_and_wait(cfg["broker"], cfg["user"], cfg["pass"],
-                                  cmd_topic, evt_topic, pl, args.timeout, show=show,
-                                  expect_rid=relay_id)
+    if args.local:
+        rc, events = local_send_and_wait(pl, args.timeout, show=show, expect_rid=relay_id)
+    else:
+        cmd_topic = "%s/gateway/%s/command/mesh" % (cfg["prefix"], cfg["border_eui"])
+        evt_topic = "%s/gateway/%s/event/mesh" % (cfg["prefix"], cfg["border_eui"])
+        rc, events = publish_and_wait(cfg["broker"], cfg["user"], cfg["pass"],
+                                      cmd_topic, evt_topic, pl, args.timeout, show=show,
+                                      expect_rid=relay_id)
 
     if args.cmd == "discover":
         resp = next((pl for et, pl in events if et == ctype), None)
