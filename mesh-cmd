@@ -48,11 +48,16 @@ BUILTIN_CATALOG = [
 def load_catalog(explicit=None):
     """Load the command catalog (list of {type,name,description,params}).
     Search order: --catalog/arg > $MESHCMD_CATALOG > mesh-commands.json next to
-    this script > ./mesh-commands.json. Falls back to BUILTIN_CATALOG."""
+    this script > ./mesh-commands.json. Falls back to BUILTIN_CATALOG.
+
+    realpath, not abspath: SenOS installs the script under /opt and puts a
+    symlink in ${bindir} so senarch-help lists it. abspath would resolve to
+    /usr/bin, miss the bundled catalog, and silently degrade to the one-entry
+    fallback -- leaving 11 of 12 commands unreachable via the documented name."""
     candidates = [
         explicit,
         os.environ.get("MESHCMD_CATALOG"),
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "mesh-commands.json"),
+        os.path.join(os.path.dirname(os.path.realpath(__file__)), "mesh-commands.json"),
         "mesh-commands.json",
     ]
     for path in candidates:
@@ -61,6 +66,12 @@ def load_catalog(explicit=None):
                 data = json.load(f)
             cmds = data.get("commands", data) if isinstance(data, dict) else data
             return [c for c in cmds if isinstance(c, dict) and "type" in c and "name" in c]
+    # The fallback carries one command. Falling back is always a deployment
+    # fault, and a silent one reads as "the relay lacks that command" -- so say
+    # so on stderr, where it will not corrupt list-commands' stdout.
+    sys.stderr.write(
+        "warning: no mesh-commands.json found (looked next to %s and in .); "
+        "using the built-in %d-command fallback\n" % (os.path.realpath(__file__), len(BUILTIN_CATALOG)))
     return BUILTIN_CATALOG
 
 # ---------------- protobuf: encode gw.MeshCommand ----------------
@@ -395,11 +406,15 @@ def local_listen_for_relays(duration):
 def default_config_path():
     """First existing mesh-cmd.conf, so `--config` is optional: $MESHCMD_CONFIG,
     then the current directory, then next to this script, then the user config
-    dir. Returns None if none exist."""
+    dir. Returns None if none exist.
+
+    realpath for the same reason as load_catalog: invoked through the ${bindir}
+    symlink, abspath points at /usr/bin, so a mesh-cmd.conf placed beside the
+    script is silently ignored."""
     home = os.path.expanduser("~")
     for p in (os.environ.get("MESHCMD_CONFIG"),
               "mesh-cmd.conf",
-              os.path.join(os.path.dirname(os.path.abspath(__file__)), "mesh-cmd.conf"),
+              os.path.join(os.path.dirname(os.path.realpath(__file__)), "mesh-cmd.conf"),
               os.path.join(home, ".config", "mesh-cmd", "mesh-cmd.conf"),
               os.path.join(home, ".mesh-cmd.conf")):
         if p and os.path.isfile(p):
