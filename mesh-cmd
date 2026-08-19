@@ -462,6 +462,26 @@ def load_config(args):
         cfg["user"] = cfg["user"] or g("username")
         cfg["pass"] = cfg["pass"] or g("password")
         cfg["prefix"] = cfg["prefix"] or g("topic_prefix")
+        # The EUI is not in mqtt-config.toml -- mqtt-forwarder asks concentratord
+        # for it at runtime -- but it is rendered next door, so read it there.
+        # Without this --from-gateway supplies everything EXCEPT border_eui and
+        # then fails asking for the one thing it was meant to provide.
+        #
+        # From /run rather than relay.json deliberately: --from-gateway means
+        # "what this gateway is currently running", and /run is what the daemons
+        # loaded. relay.json is what is *configured*, which differs whenever it
+        # has been edited without restarting the stack -- pairing a running
+        # broker with a pending EUI is the worst of both.
+        if not cfg["border_eui"]:
+            for _p in ("/run/relay/concentratord-config.toml",
+                       "/data/config/relay/concentratord-config.toml"):
+                try:
+                    m = re.search(r'(?m)^\s*gateway_id\s*=\s*"([0-9a-fA-F]{16})"', open(_p).read())
+                except OSError:
+                    continue
+                if m:
+                    cfg["border_eui"] = m.group(1)
+                    break
     return cfg
 
 PROG = "mesh-cmd"
@@ -498,7 +518,8 @@ Connection options (or set them in the --config file / environment):
   --prefix <id>         MQTT topic prefix / LNS region id (e.g. eu868)
   --local               On the Border: talk to gateway-mesh directly over ZMQ (no broker,
                         no credentials, works with any LNS egress -- needs pyzmq)
-  --from-gateway        On the Border: read broker/creds/prefix from /run/relay/mqtt-config.toml
+  --from-gateway        On the Border: read broker, credentials, topic prefix and
+                        the gateway EUI from the rendered configs in /run/relay
   --timeout <seconds>   Seconds to wait for a command ack (default 25)
   --catalog <path>      Use a specific mesh-commands.json
 
@@ -607,8 +628,12 @@ def main():
         cfg = load_config(args)
         missing = [k for k in ("broker", "border_eui", "prefix") if not cfg[k]]
         if missing:
-            sys.exit("error: missing config: %s (set via --config / env / flags, --from-gateway, "
-                     "or --local on the Border)" % ", ".join(missing))
+            sys.exit("error: missing config: %s\n"
+                     "  --local          on the Border: needs nothing else\n"
+                     "  --from-gateway   on the Border: reads broker, credentials and EUI\n"
+                     "                   from /run/relay (the mesh stack must be running)\n"
+                     "  otherwise        set them in mesh-cmd.conf, the environment, or flags"
+                     % ", ".join(missing))
 
     if args.cmd == "relays":
         if args.local:
