@@ -517,14 +517,27 @@ _USAGE_COMMANDS = """Commands:
   list-commands                  Print this tool's local command catalog
 """
 
-_USAGE_RAW_SEND = """
-  # 'send' fires a RAW proprietary type (128-255) with an optional hex-bytes
-  # payload piped to the relay script's stdin; an ASCII number is hex-encoded
-  # ("3" = 33, "30" = 3330). Each of these equals a named command above:
-  mesh-cmd send 11223344 254          # == ping            (no payload)
-  mesh-cmd send 11223344 150 33       # == set-hop-count 3  (payload "3")
-  mesh-cmd send 11223344 129 3330     # == open-wifi 30     (payload "30")
-"""
+def _usage_raw_send(transport=""):
+    """The raw-'send' examples, prefixed with the transport this machine uses.
+
+    Both usage halves show these, so the transport cannot be baked into the
+    text. On a gateway every other example carries --local, and these three are
+    the only copy-pastable lines in that view: bare, they take the MQTT path
+    and fail asking for a broker -- which on a "udp" egress border does not
+    exist at all. Off a gateway bare is right, since the config file is
+    auto-loaded.
+    """
+    rows = [("254", "ping", "no payload"),
+            ("150 33", "set-hop-count 3", 'payload "3"'),
+            ("129 3330", "open-wifi 30", 'payload "30"')]
+    cmds = ["  %s %ssend 11223344 %s" % (PROG, transport, a) for a, _, _ in rows]
+    width = max(len(c) for c in cmds)
+    return ("\n"
+            "  # 'send' fires a RAW proprietary type (128-255) with an optional hex-bytes\n"
+            "  # payload piped to the relay script's stdin; an ASCII number is hex-encoded\n"
+            '  # ("3" = 33, "30" = 3330). Each of these equals a named command above:\n'
+            + "".join("%-*s  # == %-16s(%s)\n" % (width, cmd, name, note)
+                      for cmd, (_, name, note) in zip(cmds, rows)))
 
 _USAGE_GATEWAY = """mesh-cmd - send ChirpStack Gateway Mesh commands to a relay
 
@@ -555,7 +568,7 @@ Examples:
   mesh-cmd --local open-wifi 11223344 30      # open WiFi 30 min (close-wifi to force off)
   mesh-cmd --local gps-fix 11223344           # acquire a fix; poll with gps-status
   mesh-cmd --local gps-status 11223344        # GPS progress + the persisted location
-""" + _USAGE_RAW_SEND + """
+""" + _usage_raw_send("--local ") + """
 To reach a DIFFERENT Border's broker from here, the MQTT settings can be given
 explicitly with --broker, --user, --password, --border-eui and --prefix, or in an
 INI file via --config. Those are the same options this tool shows when run off a
@@ -593,7 +606,7 @@ Examples (with a mesh-cmd.conf in the current directory):
   mesh-cmd open-wifi 11223344 30      # open WiFi 30 min (close-wifi to force off)
   mesh-cmd gps-fix 11223344           # acquire a GPS fix (default 70 min)
   mesh-cmd gps-status 11223344        # GPS progress + the persisted location
-""" + _USAGE_RAW_SEND + """
+""" + _usage_raw_send() + """
   # or give the settings as flags instead of the config file:
   mesh-cmd --broker ssl://lns.example.net:8883 --user op --password s3cret \\
            --border-eui 0016c001aabbccdd --prefix eu868 ping 11223344
@@ -601,6 +614,10 @@ Examples (with a mesh-cmd.conf in the current directory):
 Config: a mesh-cmd.conf in the current dir (or next to this script, or
 ~/.config/mesh-cmd/mesh-cmd.conf) is auto-loaded, so --config is optional.
 Resolution (highest first): CLI flags > environment variables > config file.
+
+Environment overrides:
+  MESHCMD_BROKER  MESHCMD_USER  MESHCMD_PASS  MESHCMD_BORDER_EUI  MESHCMD_PREFIX
+  MESHCMD_CONFIG (config file path)  MESHCMD_CATALOG (mesh-commands.json path)
 
 Run on a Border gateway itself, --local needs none of this: it reaches
 gateway-mesh over ZMQ with no broker or credentials at all.
@@ -618,6 +635,21 @@ def print_usage(file=None):
     --broker on one, is exactly what that ambiguity produces.
     """
     (file or sys.stdout).write(_USAGE_GATEWAY if on_gateway() else _USAGE_REMOTE)
+
+
+class UsageParser(argparse.ArgumentParser):
+    """Any bad usage prints our block (like the Go CLI's printUsage), not argparse's.
+
+    main() builds its parser as a UsageParser, so this is not optional
+    decoration: without it every invocation dies on a NameError before argparse
+    ever sees the arguments. It was lost once already when the usage text above
+    was split in two -- it sits between print_usage and main(), which is exactly
+    where a "replace up to the next def" edit lands.
+    """
+    def error(self, message):
+        print_usage(sys.stderr)
+        sys.stderr.write("\nerror: %s\n" % message)
+        sys.exit(2)
 
 def main():
     if len(sys.argv) == 1 or sys.argv[1] == "help" or any(a in ("-h", "--help") for a in sys.argv[1:]):
