@@ -486,16 +486,23 @@ def load_config(args):
 
 PROG = "mesh-cmd"
 
-def print_usage(file=None):
-    (file or sys.stdout).write("""mesh-cmd - send ChirpStack Gateway Mesh commands to a relay
+def on_gateway():
+    """True on a SenArch gateway, whether or not the mesh stack is running.
 
-Transports: MQTT to the Border's broker (default), or --local to talk to
-gateway-mesh directly over ZMQ when running on the Border itself.
+    Decides which half of the usage is worth printing: --local and
+    --from-gateway only mean anything here, and the broker flags are what you
+    reach for everywhere else.
 
-Usage:
-  mesh-cmd [connection options] <command> [arguments]
+    Keyed on the relay stack's own paths rather than on os-release, and
+    deliberately NOT on whether the transports work this second: with the stack
+    stopped /run/relay is empty and the ZMQ socket is gone, but --local is still
+    the right flag and its runtime error says so plainly. Hiding it then would
+    send someone to configure a broker for no reason.
+    """
+    return os.path.isdir("/run/relay") or os.path.isdir("/opt/lorawan/chirpstack")
 
-Commands:
+
+_USAGE_COMMANDS = """Commands:
   reboot <relay_id>              Reboot the relay (re-opens the boot-time WiFi window)
   ping <relay_id>                Connectivity check -- the relay replies "pong"
   set-hop-count <relay_id> <n>   Set the mesh max hop count (1-8) and persist it
@@ -508,18 +515,71 @@ Commands:
   relays                         List relay_ids the Border is hearing (passive; no relay_id needed)
   send <relay_id> <type> [hex]   Send a raw proprietary command (128-255) + optional hex payload
   list-commands                  Print this tool's local command catalog
+"""
 
+_USAGE_RAW_SEND = """
+  # 'send' fires a RAW proprietary type (128-255) with an optional hex-bytes
+  # payload piped to the relay script's stdin; an ASCII number is hex-encoded
+  # ("3" = 33, "30" = 3330). Each of these equals a named command above:
+  mesh-cmd send 11223344 254          # == ping            (no payload)
+  mesh-cmd send 11223344 150 33       # == set-hop-count 3  (payload "3")
+  mesh-cmd send 11223344 129 3330     # == open-wifi 30     (payload "30")
+"""
+
+_USAGE_GATEWAY = """mesh-cmd - send ChirpStack Gateway Mesh commands to a relay
+
+Running on a gateway, so --local is the simplest route: it talks to gateway-mesh
+directly over ZMQ, needs no broker and no credentials, and works whatever the
+LNS egress is.
+
+Usage:
+  mesh-cmd --local <command> [arguments]
+
+""" + _USAGE_COMMANDS + """
+Connection options:
+  --local               Talk to gateway-mesh over ZMQ. Nothing to configure.
+                        Needs the mesh stack running on this gateway.
+  --from-gateway        Use the MQTT path with this gateway's own broker: reads
+                        broker, credentials, topic prefix and the gateway EUI
+                        from the rendered configs in /run/relay.
+  --timeout <seconds>   Seconds to wait for a command ack (default 25)
+  --catalog <path>      Use a specific mesh-commands.json
+
+Examples:
+  mesh-cmd --local relays                     # which relays is this Border hearing?
+  mesh-cmd --local discover 11223344          # which commands does this relay support?
+  mesh-cmd --local ping 11223344              # reachable over the mesh? (-> pong)
+  mesh-cmd --local reboot 11223344            # reboot it
+  mesh-cmd --local run power 11223344         # a catalog command (status/power/version)
+  mesh-cmd --local set-hop-count 11223344 3   # set the mesh max hop count
+  mesh-cmd --local open-wifi 11223344 30      # open WiFi 30 min (close-wifi to force off)
+  mesh-cmd --local gps-fix 11223344           # acquire a fix; poll with gps-status
+  mesh-cmd --local gps-status 11223344        # GPS progress + the persisted location
+""" + _USAGE_RAW_SEND + """
+To reach a DIFFERENT Border's broker from here, the MQTT settings can be given
+explicitly with --broker, --user, --password, --border-eui and --prefix, or in an
+INI file via --config. Those are the same options this tool shows when run off a
+gateway.
+"""
+
+_USAGE_REMOTE = """mesh-cmd - send ChirpStack Gateway Mesh commands to a relay
+
+Commands reach a relay through the Border gateway's MQTT broker, so this needs
+the broker address, credentials and the Border's EUI -- as flags, environment
+variables, or a mesh-cmd.conf.
+
+Usage:
+  mesh-cmd [connection options] <command> [arguments]
+
+""" + _USAGE_COMMANDS + """
 Connection options (or set them in the --config file / environment):
   --config <path>       INI file (optional -- auto-detected; see Config below)
-  --broker <url>        ssl://host:port or tcp://host:port
+  --broker <url>        ssl://host:port -- use ssl://, since tcp:// sends the
+                        password and every mesh command in the clear
   --user <name>         MQTT username
   --password <pass>     MQTT password
   --border-eui <eui>    Border Gateway EUI (16 hex chars)
   --prefix <id>         MQTT topic prefix / LNS region id (e.g. eu868)
-  --local               On the Border: talk to gateway-mesh directly over ZMQ (no broker,
-                        no credentials, works with any LNS egress -- needs pyzmq)
-  --from-gateway        On the Border: read broker, credentials, topic prefix and
-                        the gateway EUI from the rendered configs in /run/relay
   --timeout <seconds>   Seconds to wait for a command ack (default 25)
   --catalog <path>      Use a specific mesh-commands.json
 
@@ -531,39 +591,33 @@ Examples (with a mesh-cmd.conf in the current directory):
   mesh-cmd run power 11223344         # a catalog command by name (status/power/version)
   mesh-cmd set-hop-count 11223344 3   # set the mesh max hop count
   mesh-cmd open-wifi 11223344 30      # open WiFi 30 min (close-wifi to force off)
-  mesh-cmd gps-fix 11223344           # acquire a GPS fix (default 70 min); poll with gps-status
+  mesh-cmd gps-fix 11223344           # acquire a GPS fix (default 70 min)
   mesh-cmd gps-status 11223344        # GPS progress + the persisted location
-
-  # 'send' fires a RAW proprietary type (128-255) with an optional hex-bytes
-  # payload piped to the relay script's stdin; an ASCII number is hex-encoded
-  # ("3" = 33, "30" = 3330). Each of these equals a named command above:
-  mesh-cmd send 11223344 254          # == ping            (no payload)
-  mesh-cmd send 11223344 150 33       # == set-hop-count 3  (payload "3")
-  mesh-cmd send 11223344 129 3330     # == open-wifi 30     (payload "30")
-
-  # connection settings can be given as flags instead of the config file:
-  mesh-cmd --broker ssl://lns.example.net:8883 --user op --pass s3cret \\
+""" + _USAGE_RAW_SEND + """
+  # or give the settings as flags instead of the config file:
+  mesh-cmd --broker ssl://lns.example.net:8883 --user op --password s3cret \\
            --border-eui 0016c001aabbccdd --prefix eu868 ping 11223344
 
 Config: a mesh-cmd.conf in the current dir (or next to this script, or
 ~/.config/mesh-cmd/mesh-cmd.conf) is auto-loaded, so --config is optional.
 Resolution (highest first): CLI flags > environment variables > config file.
 
-Environment overrides:
-  MESHCMD_BROKER
-  MESHCMD_USER
-  MESHCMD_PASS
-  MESHCMD_BORDER_EUI
-  MESHCMD_PREFIX
-  MESHCMD_CATALOG
-""")
+Run on a Border gateway itself, --local needs none of this: it reaches
+gateway-mesh over ZMQ with no broker or credentials at all.
+"""
 
-class UsageParser(argparse.ArgumentParser):
-    # Any bad usage prints our block (like the Go CLI's printUsage), not argparse's.
-    def error(self, message):
-        print_usage(sys.stderr)
-        sys.stderr.write("\nerror: %s\n" % message)
-        sys.exit(2)
+
+def print_usage(file=None):
+    """Print the half of the usage that applies here.
+
+    The full text documents both transports, and on any given machine roughly
+    half of it is unusable: --local and --from-gateway only work on a gateway,
+    the five broker flags are what you need anywhere else. Printing all of it
+    everywhere leaves the reader to work out which half is theirs -- and the
+    most common first mistake, reaching for --from-gateway off a gateway or for
+    --broker on one, is exactly what that ambiguity produces.
+    """
+    (file or sys.stdout).write(_USAGE_GATEWAY if on_gateway() else _USAGE_REMOTE)
 
 def main():
     if len(sys.argv) == 1 or sys.argv[1] == "help" or any(a in ("-h", "--help") for a in sys.argv[1:]):
