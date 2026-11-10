@@ -77,6 +77,22 @@ Environment variables: `MESHCMD_BROKER`, `MESHCMD_USER`, `MESHCMD_PASS`, `MESHCM
 # set the relay's mesh max hop count (1-8), persisted
 ./mesh-cmd --config mesh-cmd.conf set-hop-count 11223344 3
 
+# set the relay's DevAddr/JoinEUI filters, persisted. Replaces both lists. Relays
+# forward every sensor they hear unless filtered, and other networks' sensors use
+# up the relay's duty cycle. --from-dev-addr takes the DevAddr of any one of your
+# sensors and derives your network's prefix from it (260b1a2c -> 26000000/7, TTN).
+# After moving to another network server, send it to every relay again: sensors
+# rejoin with addresses from the new server's range. Needs a relay image with
+# command 151 (check with discover).
+./mesh-cmd --config mesh-cmd.conf set-filters 11223344 --from-dev-addr 260b1a2c
+./mesh-cmd --config mesh-cmd.conf set-filters 11223344 26000000/7 70b3d57ed0000000/36
+./mesh-cmd --config mesh-cmd.conf set-filters 11223344 --none     # relay everything again
+
+# turn off direct uplinks: the relay becomes a pure mesh repeater that passes on
+# other relays' frames but nothing for the sensors it hears itself, keeping its
+# duty-cycle budget for the mesh. "on" (the default) restores it. Persisted.
+./mesh-cmd --config mesh-cmd.conf set-direct-uplink 11223344 off
+
 # open a mesh-only relay's WiFi window for N minutes (default 30) to reach it, then close it
 ./mesh-cmd --config mesh-cmd.conf open-wifi 11223344 30
 ./mesh-cmd --config mesh-cmd.conf close-wifi 11223344
@@ -141,6 +157,12 @@ Each `send` below is exactly equivalent to the named subcommand next to it:
 
 # set hop count to 3 (type 150, payload "3"=0x33)  == set-hop-count 11223344 3
 ./mesh-cmd send 11223344 150 33
+
+# DevAddr filter (type 151, payload "26000000/7")  == set-filters 11223344 26000000/7
+./mesh-cmd send 11223344 151 32363030303030302f37
+
+# direct uplinks off (type 152, payload "off")     == set-direct-uplink 11223344 off
+./mesh-cmd send 11223344 152 6f6666
 
 # open WiFi for 30 min (type 129, payload "30")    == open-wifi 11223344 30
 ./mesh-cmd send 11223344 129 3330

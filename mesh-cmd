@@ -484,6 +484,71 @@ def load_config(args):
                     break
     return cfg
 
+# --- set-filters (command 151) ---
+# Same token rules as the relay's set-filters.sh, which match gateway-mesh's own
+# parser (lrwn_filters): a value gateway-mesh can't parse would stop gateway-relay
+# from starting and take the relay off the mesh. A /0 length is refused as well:
+# gateway-mesh would treat it as an exact match, not match-all.
+DEV_ADDR_PREFIX_RE = re.compile(r"^[0-9a-f]{8}/([1-9]|[12][0-9]|3[0-2])$")
+JOIN_EUI_PREFIX_RE = re.compile(r"^[0-9a-f]{16}/([1-9]|[1-5][0-9]|6[0-4])$")
+MAX_FILTER_PAYLOAD = 200   # bytes -- the command has to fit one mesh frame
+
+# NwkID bits per DevAddr type 0-7 (LoRaWAN Backend Interfaces; ChirpStack lrwn netid.rs).
+_NWKID_BITS = (6, 6, 9, 11, 12, 13, 15, 17)
+_NETID_NAMES = {0x000013: "The Things Network",
+                0x000000: "private/experimental network, shared by every network on this NetID",
+                0x000001: "private/experimental network, shared by every network on this NetID"}
+
+def devaddr_network_prefix(devaddr):
+    """The DevAddr prefix of the network a DevAddr belongs to, plus a description.
+
+    The type is the number of leading 1-bits; the network prefix is those type bits
+    plus the NwkID. Types 3 and 4 get one bit less: an older spec revision gave them
+    one NwkID bit fewer, and a broader prefix still covers the whole network.
+    """
+    if not re.fullmatch(r"[0-9a-fA-F]{8}", devaddr):
+        sys.exit("error: DevAddr must be 8 hex digits, got '%s'" % devaddr)
+    addr = int(devaddr, 16)
+    t = 0
+    while t < 8 and addr & (0x80000000 >> t):
+        t += 1
+    if t == 8:
+        sys.exit("error: DevAddr %s has no valid type prefix (starts with ff)" % devaddr)
+    bits = _NWKID_BITS[t]
+    plen = t + 1 + bits - (1 if t in (3, 4) else 0)
+    prefix = "%08x/%d" % (addr & (0xFFFFFFFF << (32 - plen)) & 0xFFFFFFFF, plen)
+    if t > 2:   # the DevAddr only carries the low bits of a type 3-7 NetID
+        return prefix, "NetID type %d" % t
+    netid = (t << 21) | ((addr >> (31 - t - bits)) & ((1 << bits) - 1))
+    name = _NETID_NAMES.get(netid)
+    return prefix, "NetID %06x%s" % (netid, ", " + name if name else "")
+
+def filter_payload(prefixes, devaddrs, clear):
+    """Build the set-filters payload: space-separated prefixes, or "none"."""
+    if clear:
+        if prefixes or devaddrs:
+            sys.exit("error: --none clears both filter lists; give it on its own")
+        return b"none"
+    tokens = []
+    for p in prefixes:
+        p = p.strip().lower()
+        if not (DEV_ADDR_PREFIX_RE.match(p) or JOIN_EUI_PREFIX_RE.match(p)):
+            sys.exit("error: '%s' is not a DevAddr prefix (8 hex digits/1-32) or a "
+                     "JoinEUI prefix (16 hex digits/1-64)" % p)
+        tokens.append(p)
+    for d in devaddrs:
+        prefix, desc = devaddr_network_prefix(d)
+        print("DevAddr %s -> %s (%s)" % (d.lower(), prefix, desc))
+        if prefix not in tokens:
+            tokens.append(prefix)
+    if not tokens:
+        sys.exit("error: give at least one prefix or --from-dev-addr, or --none to clear the filters")
+    payload = " ".join(tokens).encode()
+    if len(payload) > MAX_FILTER_PAYLOAD:
+        sys.exit("error: %d prefixes are %d bytes; at most %d fit one mesh frame"
+                 % (len(tokens), len(payload), MAX_FILTER_PAYLOAD))
+    return payload
+
 PROG = "mesh-cmd"
 
 def on_gateway():
@@ -506,6 +571,12 @@ _USAGE_COMMANDS = """Commands:
   reboot <relay_id>              Reboot the relay (re-opens the boot-time WiFi window)
   ping <relay_id>                Connectivity check -- the relay replies "pong"
   set-hop-count <relay_id> <n>   Set the mesh max hop count (1-8) and persist it
+  set-filters <relay_id> <p>...  Set the relay's DevAddr/JoinEUI filters and persist them
+                                 (replaces both lists; --from-dev-addr <devaddr> derives
+                                 the network's prefix from one sensor; --none clears)
+  set-direct-uplink <relay_id> on|off
+                                 Relay the sensors this relay hears itself (on, default),
+                                 or only other relays' frames (off: pure mesh repeater)
   open-wifi <relay_id> [min]     Open the relay's WiFi window for N minutes (default 30)
   close-wifi <relay_id>          Force the relay's WiFi off now
   gps-fix <relay_id> [min]       Acquire a GPS fix (default 70, max 90) and persist the location
@@ -565,6 +636,10 @@ Examples:
   mesh-cmd --local reboot 11223344            # reboot it
   mesh-cmd --local run power 11223344         # a catalog command (status/power/version)
   mesh-cmd --local set-hop-count 11223344 3   # set the mesh max hop count
+  mesh-cmd --local set-filters 11223344 --from-dev-addr 260b1a2c
+                                              # relay only that sensor's network
+  mesh-cmd --local set-direct-uplink 11223344 off
+                                              # pure mesh repeater
   mesh-cmd --local open-wifi 11223344 30      # open WiFi 30 min (close-wifi to force off)
   mesh-cmd --local gps-fix 11223344           # acquire a fix; poll with gps-status
   mesh-cmd --local gps-status 11223344        # GPS progress + the persisted location
@@ -603,6 +678,10 @@ Examples (with a mesh-cmd.conf in the current directory):
   mesh-cmd ping 11223344              # reachable over the mesh? (-> pong)
   mesh-cmd run power 11223344         # a catalog command by name (status/power/version)
   mesh-cmd set-hop-count 11223344 3   # set the mesh max hop count
+  mesh-cmd set-filters 11223344 26000000/7
+                                      # relay only DevAddrs in 26000000/7
+  mesh-cmd set-direct-uplink 11223344 off
+                                      # pure mesh repeater
   mesh-cmd open-wifi 11223344 30      # open WiFi 30 min (close-wifi to force off)
   mesh-cmd gps-fix 11223344           # acquire a GPS fix (default 70 min)
   mesh-cmd gps-status 11223344        # GPS progress + the persisted location
@@ -672,6 +751,14 @@ def main():
     pp.add_argument("relay_id")
     ph = sub.add_parser("set-hop-count", help="set the relay's mesh max hop count (1-8), persisted")
     ph.add_argument("relay_id"); ph.add_argument("hops", type=int)
+    pf = sub.add_parser("set-filters", help="set the relay's DevAddr/JoinEUI filters (replaces both lists), persisted")
+    pf.add_argument("relay_id"); pf.add_argument("prefixes", nargs="*")
+    pf.add_argument("--from-dev-addr", dest="from_dev_addr", action="append", default=[], metavar="DEVADDR",
+                    help="derive the network's DevAddr prefix from one sensor's DevAddr")
+    pf.add_argument("--none", dest="clear", action="store_true", help="clear both lists (relay everything)")
+    pdu = sub.add_parser("set-direct-uplink",
+                         help="relay the sensors this relay hears itself (on) or only other relays' frames (off), persisted")
+    pdu.add_argument("relay_id"); pdu.add_argument("state", choices=["on", "off"])
     po = sub.add_parser("open-wifi", help="open the relay's WiFi window for N minutes (default 30)")
     po.add_argument("relay_id"); po.add_argument("minutes", type=int, nargs="?", default=None)
     pc = sub.add_parser("close-wifi", help="force the relay's WiFi off now")
@@ -757,6 +844,11 @@ def main():
         if not (1 <= args.hops <= 8):
             sys.exit("error: hops must be 1-8 (mesh hop_count is 3 bits: 1..8)")
         ctype, payload = named_type("set-hop-count"), str(args.hops).encode()
+    elif args.cmd == "set-filters":
+        payload = filter_payload(args.prefixes, args.from_dev_addr, args.clear)
+        ctype = named_type("set-filters")
+    elif args.cmd == "set-direct-uplink":
+        ctype, payload = named_type("set-direct-uplink"), args.state.encode()
     elif args.cmd == "open-wifi":
         if args.minutes is not None and not (1 <= args.minutes <= 720):
             sys.exit("error: minutes must be 1-720 (or omit for the relay default of 30)")
