@@ -58,7 +58,7 @@
     {
       "type": 202,
       "name": "version",
-      "description": "Report the SenOS image version (fleet / upgrade tracking).",
+      "description": "Report the SenOS image version and the mesh component versions (fleet / upgrade tracking).",
       "params": []
     },
     {

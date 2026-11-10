@@ -68,6 +68,10 @@ Environment variables: `MESHCMD_BROKER`, `MESHCMD_USER`, `MESHCMD_PASS`, `MESHCM
 ## Usage
 
 ```
+# which release is this? ("mesh-cmd 1.1.0-rc.1"; a checkout says "dev" -- the SenOS
+# recipe stamps the version at install, the way gateway-ui gets -X main.Version)
+./mesh-cmd --version
+
 # reboot a relay (command type 128), identified by its relay_id (last 4 bytes of its EUI)
 ./mesh-cmd --config mesh-cmd.conf reboot 11223344
 

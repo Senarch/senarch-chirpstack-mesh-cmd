@@ -550,6 +550,11 @@ def filter_payload(prefixes, devaddrs, clear):
     return payload
 
 PROG = "mesh-cmd"
+# The release this tool is. Stamped at install by the SenOS recipe with its PV,
+# which comes from the tag the recipe is pinned to -- the way gateway-ui gets
+# -X main.Version. A checkout or a hand copy says "dev". The recipe greps for
+# this exact line, so keep it on one line in this form.
+VERSION = "dev"
 
 def on_gateway():
     """True on a SenArch gateway, whether or not the mesh stack is running.
@@ -628,6 +633,7 @@ Connection options:
                         from the rendered configs in /run/relay.
   --timeout <seconds>   Seconds to wait for a command ack (default 25)
   --catalog <path>      Use a specific mesh-commands.json
+  --version             Print this tool's version (mesh-cmd <version>) and exit
 
 Examples:
   mesh-cmd --local relays                     # which relays is this Border hearing?
@@ -670,6 +676,7 @@ Connection options (or set them in the --config file / environment):
   --prefix <id>         MQTT topic prefix / LNS region id (e.g. eu868)
   --timeout <seconds>   Seconds to wait for a command ack (default 25)
   --catalog <path>      Use a specific mesh-commands.json
+  --version             Print this tool's version (mesh-cmd <version>) and exit
 
 Examples (with a mesh-cmd.conf in the current directory):
   mesh-cmd relays                     # list relay_ids the Border is hearing
@@ -731,6 +738,9 @@ class UsageParser(argparse.ArgumentParser):
         sys.exit(2)
 
 def main():
+    if sys.argv[1:] == ["--version"]:
+        print("%s %s" % (PROG, VERSION))
+        return 0
     if len(sys.argv) == 1 or sys.argv[1] == "help" or any(a in ("-h", "--help") for a in sys.argv[1:]):
         print_usage()
         return 0
