@@ -32,6 +32,18 @@
       "params": [ { "name": "hops", "type": "int", "min": 1, "max": 8 } ]
     },
     {
+      "type": 151,
+      "name": "set-filters",
+      "description": "Set the mesh DevAddr/JoinEUI filters and persist them (replaces both lists; \"none\" clears).",
+      "params": [ { "name": "prefixes", "type": "string" } ]
+    },
+    {
+      "type": 152,
+      "name": "set-direct-uplink",
+      "description": "Turn the relay's direct uplinks on or off and persist it (off = pure mesh repeater: other relays' frames only).",
+      "params": [ { "name": "state", "type": "string", "values": ["on", "off"] } ]
+    },
+    {
       "type": 200,
       "name": "status",
       "description": "Compact health snapshot: uptime, load, temperature, memory, SenOS version.",
