@@ -108,6 +108,9 @@ Environment variables: `MESHCMD_BROKER`, `MESHCMD_USER`, `MESHCMD_PASS`, `MESHCM
 
 # run a named command from the catalog (status, power, version, restart-stack, ...)
 ./mesh-cmd --config mesh-cmd.conf run status  11223344
+#   -> up=45231s load=0.23 temp=36C mem=8% v=2.1.0-rc.16 dc=3.21%/1.00%
+#      dc = the relay's airtime over the last hour in 868.0-868.6 MHz against
+#      that band's limit; "?" until concentratord has logged one (SenOS #430)
 ./mesh-cmd --config mesh-cmd.conf run power   11223344
 
 # send an arbitrary proprietary command by number (type + optional hex payload)
