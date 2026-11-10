@@ -46,7 +46,7 @@
     {
       "type": 200,
       "name": "status",
-      "description": "Compact health snapshot: uptime, load, temperature, memory, SenOS version.",
+      "description": "Compact health snapshot: uptime, load, temperature, memory, SenOS version, and the relay's duty cycle against its band limit (dc=3.21%/1.00%).",
       "params": []
     },
     {
