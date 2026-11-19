@@ -108,9 +108,12 @@ Environment variables: `MESHCMD_BROKER`, `MESHCMD_USER`, `MESHCMD_PASS`, `MESHCM
 
 # run a named command from the catalog (status, power, version, restart-stack, ...)
 ./mesh-cmd --config mesh-cmd.conf run status  11223344
-#   -> up=45231s load=0.23 temp=36C mem=8% v=2.1.0-rc.16 dc=3.21%/1.00%
-#      dc = the relay's airtime over the last hour in 868.0-868.6 MHz against
-#      that band's limit; "?" until concentratord has logged one (SenOS #430)
+#   -> up=45231s load=0.23 temp=36C mem=8% v=2.1.0-rc.19 dc=M:3.21%/1.00%,L:0.40%/1.00%
+#      dc = the relay's airtime over the last hour against each band's limit.
+#      EU868 mesh frames alternate between band M (868.0-868.6 MHz) and band L
+#      (865-868 MHz), so both are reported (SenOS #430, #539). A band shows "?"
+#      until it has sent something since concentratord started; dc=? when
+#      neither has (concentratord down, or a region without duty-cycle rules).
 ./mesh-cmd --config mesh-cmd.conf run power   11223344
 
 # send an arbitrary proprietary command by number (type + optional hex payload)
