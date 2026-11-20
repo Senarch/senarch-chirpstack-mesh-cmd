@@ -225,7 +225,8 @@ def listen_for_relays(broker, user, pw, evt_topic, duration):
     Returns {relay_id: {"count", "last", "via"}}."""
     print("listening on %s for %ds..." % (evt_topic, duration))
     sock = _mqtt_connect_subscribe(broker, user, pw, evt_topic)
-    print("(relays announce on their heartbeat interval -- SenOS default 5m; ctrl-c to stop early)")
+    print("(relays announce on their heartbeat interval -- SenOS default 10m; a relay with sensor"
+          " traffic shows up sooner, its relayed uplinks carry its relay_id; ctrl-c to stop early)")
 
     seen = {}
     deadline = time.time() + duration
@@ -378,7 +379,8 @@ def local_send_and_wait(payload, wait, show=True, expect_rid=None):
 def local_listen_for_relays(duration):
     """--local equivalent of listen_for_relays()."""
     print("listening on %s for %ds..." % (LOCAL_EVENT_URL, duration))
-    print("(relays announce on their heartbeat interval -- SenOS default 5m; ctrl-c to stop early)")
+    print("(relays announce on their heartbeat interval -- SenOS default 10m; a relay with sensor"
+          " traffic shows up sooner, its relayed uplinks carry its relay_id; ctrl-c to stop early)")
     sub = _local_sub()
     seen = {}
     deadline = time.time() + duration
@@ -786,8 +788,9 @@ def main():
     pd = sub.add_parser("discover", help="ask a relay which command types it has configured (mesh discovery)")
     pd.add_argument("relay_id")
     prl = sub.add_parser("relays", help="list relay_ids the border is hearing (passive mesh discovery)")
-    prl.add_argument("--for", dest="for_seconds", type=int, default=330, metavar="SECONDS",
-                     help="seconds to listen (default 330 = one 5m heartbeat interval + margin)")
+    prl.add_argument("--for", dest="for_seconds", type=int, default=630, metavar="SECONDS",
+                     help="seconds to listen (default 630 = one 10m SenOS heartbeat interval + margin;"
+                          " relays with sensor traffic show up sooner)")
     args = p.parse_args()
 
     catalog = load_catalog(args.catalog)
