@@ -149,6 +149,39 @@ If you run it **on the Border Gateway itself**, `--from-gateway` reads the broke
 ./mesh-cmd --from-gateway --border-eui 0016c001aabbccdd reboot 11223344
 ```
 
+## JSON output (`--json`)
+
+For programs, such as the gateway web UI: `--json` prints exactly **one JSON
+object on stdout**, the result or the error. Everything else, the usual text,
+goes to stderr. The exit code is unchanged: 0 = acknowledged, 2 = no ack or
+nothing heard, 1 = error.
+
+```bash
+senarch-mesh-cmd --local --json run status f117de29
+```
+```json
+{"acked": true, "border_eui": "0016c001f117f8d8", "command": "status", "elapsed_s": 2.2,
+ "error": null, "ok": true, "payload_hex": "", "relay_id": "f117de29", "timeout_s": 25, "type": 200,
+ "replies": [{"type": 200,
+              "text": "up=19247s load=0.87 temp=30C mem=17% v=2.1.0-rc.23 dc=M:0.27%/1.00%,L:0.27%/1.00%",
+              "fields": {"up": "19247s", "load": "0.87", "temp": "30C", "mem": "17%",
+                         "v": "2.1.0-rc.23", "dc": "M:0.27%/1.00%,L:0.27%/1.00%"}}]}
+```
+
+- **A command:** `ok` and `acked` are true when the relay answered within
+  `--timeout`. `replies` holds each answer:
+  - `type`: the command type;
+  - `text`: the relay's reply;
+  - `fields`: the reply as an object when it is all `key=value` tokens
+    (`status`, `power`, `version`, `gps-status`), otherwise `null`
+    (`pong`, `ack: …`).
+  - Without an answer: `"ok": false`, `"acked": false` and `error` says so.
+- **`discover`** adds `supported`: `[{"type", "name", "description"}]`.
+- **`relays`:** `{"ok", "border_eui", "listened_s", "relays": [{"relay_id",
+  "last_seen_s_ago", "messages", "via"}]}`.
+- **`list-commands`:** `{"ok": true, "commands": [{"type", "name", "description"}]}`.
+- **Errors**, including bad arguments: `{"ok": false, "error": "<message>"}`.
+
 ## The `send` escape hatch (raw commands)
 
 The named subcommands (`reboot`, `ping`, `open-wifi`, `run <name>`, …) are conveniences: each looks up a command **type** in the catalog and encodes the payload for you. `send` skips the catalog and fires **any** proprietary type (128–255) with a **raw payload** — use it to drive a command that isn't in the catalog yet, or to test the wire format directly.
