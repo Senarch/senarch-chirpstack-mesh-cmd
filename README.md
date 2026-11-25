@@ -101,6 +101,13 @@ Environment variables: `MESHCMD_BROKER`, `MESHCMD_USER`, `MESHCMD_PASS`, `MESHCM
 ./mesh-cmd --config mesh-cmd.conf open-wifi 11223344 30
 ./mesh-cmd --config mesh-cmd.conf close-wifi 11223344
 
+# turn a relay's LTE on for N minutes (default 30, max 720), e.g. for a software
+# update or remote access over its VPN, then off again by itself. The relay needs
+# a SIM and a SenOS image with command 132 (check with discover). It acks over
+# the mesh at once; LTE comes up within about a minute.
+./mesh-cmd --config mesh-cmd.conf open-lte 11223344 60
+./mesh-cmd --config mesh-cmd.conf close-lte 11223344
+
 # acquire a GPS fix and persist the relay's location (default 70 min, max 90);
 # acks immediately, then poll progress + the persisted location with gps-status
 ./mesh-cmd --config mesh-cmd.conf gps-fix    11223344
@@ -114,6 +121,8 @@ Environment variables: `MESHCMD_BROKER`, `MESHCMD_USER`, `MESHCMD_PASS`, `MESHCM
 #      (865-868 MHz), so both are reported (SenOS #430, #539). A band shows "?"
 #      until it has sent something since concentratord started; dc=? when
 #      neither has (concentratord down, or a region without duty-cycle rules).
+#      While an open-lte window runs the line ends with lte=on(25m,catm1):
+#      minutes left and the network type (catm1, 2g, or ? before the first check).
 ./mesh-cmd --config mesh-cmd.conf run power   11223344
 
 # send an arbitrary proprietary command by number (type + optional hex payload)
@@ -214,6 +223,9 @@ Each `send` below is exactly equivalent to the named subcommand next to it:
 
 # force WiFi off (type 130, no payload)            == close-wifi 11223344
 ./mesh-cmd send 11223344 130
+
+# LTE on for 60 min (type 132, payload "60")       == open-lte 11223344 60
+./mesh-cmd send 11223344 132 3630
 
 # a type the relay does NOT have configured -> ignored, no ack, the tool times out
 ./mesh-cmd send 11223344 199 0a

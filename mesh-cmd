@@ -586,6 +586,8 @@ _USAGE_COMMANDS = """Commands:
                                  or only other relays' frames (off: pure mesh repeater)
   open-wifi <relay_id> [min]     Open the relay's WiFi window for N minutes (default 30)
   close-wifi <relay_id>          Force the relay's WiFi off now
+  open-lte <relay_id> [min]      Turn the relay's LTE on for N minutes (default 30)
+  close-lte <relay_id>           Turn the relay's LTE off now
   gps-fix <relay_id> [min]       Acquire a GPS fix (default 70, max 90) and persist the location
   gps-status <relay_id>          Report GPS acquisition status + the persisted location
   run <name> <relay_id> [hex]    Run a named catalog command (status, power, version, restart-stack)
@@ -651,6 +653,7 @@ Examples:
   mesh-cmd --local set-direct-uplink 11223344 off
                                               # pure mesh repeater
   mesh-cmd --local open-wifi 11223344 30      # open WiFi 30 min (close-wifi to force off)
+  mesh-cmd --local open-lte 11223344 60       # LTE on 60 min (close-lte to turn it off)
   mesh-cmd --local gps-fix 11223344           # acquire a fix; poll with gps-status
   mesh-cmd --local gps-status 11223344        # GPS progress + the persisted location
 """ + _usage_raw_send("--local ") + """
@@ -696,6 +699,7 @@ Examples (with a mesh-cmd.conf in the current directory):
   mesh-cmd set-direct-uplink 11223344 off
                                       # pure mesh repeater
   mesh-cmd open-wifi 11223344 30      # open WiFi 30 min (close-wifi to force off)
+  mesh-cmd open-lte 11223344 60       # LTE on 60 min (close-lte to turn it off)
   mesh-cmd gps-fix 11223344           # acquire a GPS fix (default 70 min)
   mesh-cmd gps-status 11223344        # GPS progress + the persisted location
 """ + _usage_raw_send() + """
@@ -815,6 +819,10 @@ def main():
     po.add_argument("relay_id"); po.add_argument("minutes", type=int, nargs="?", default=None)
     pc = sub.add_parser("close-wifi", help="force the relay's WiFi off now")
     pc.add_argument("relay_id")
+    pol = sub.add_parser("open-lte", help="turn the relay's LTE on for N minutes (default 30)")
+    pol.add_argument("relay_id"); pol.add_argument("minutes", type=int, nargs="?", default=None)
+    pcl = sub.add_parser("close-lte", help="turn the relay's LTE off now")
+    pcl.add_argument("relay_id")
     pgf = sub.add_parser("gps-fix", help="acquire a GPS fix and persist the relay location (default 70 min, max 90)")
     pgf.add_argument("relay_id"); pgf.add_argument("minutes", type=int, nargs="?", default=None)
     pgs = sub.add_parser("gps-status", help="report the relay's GPS acquisition status + persisted location")
@@ -918,6 +926,13 @@ def main():
         ctype = named_type("open-wifi")
     elif args.cmd == "close-wifi":
         ctype, payload = named_type("close-wifi"), b""
+    elif args.cmd == "open-lte":
+        if args.minutes is not None and not (1 <= args.minutes <= 720):
+            sys.exit("error: minutes must be 1-720 (or omit for the relay default of 30)")
+        payload = str(args.minutes).encode() if args.minutes is not None else b""
+        ctype = named_type("open-lte")
+    elif args.cmd == "close-lte":
+        ctype, payload = named_type("close-lte"), b""
     elif args.cmd == "gps-fix":
         if args.minutes is not None and not (1 <= args.minutes <= 90):
             sys.exit("error: minutes must be 1-90 (or omit for the relay default of 70)")
