@@ -634,6 +634,8 @@ Connection options:
                         broker, credentials, topic prefix and the gateway EUI
                         from the rendered configs in /run/relay.
   --timeout <seconds>   Seconds to wait for a command ack (default 25)
+  --json                Print one JSON object on stdout (the result, or the
+                        error); the usual text goes to stderr. For the web UI.
   --catalog <path>      Use a specific mesh-commands.json
   --version             Print this tool's version (mesh-cmd <version>) and exit
 
@@ -677,6 +679,8 @@ Connection options (or set them in the --config file / environment):
   --border-eui <eui>    Border Gateway EUI (16 hex chars)
   --prefix <id>         MQTT topic prefix / LNS region id (e.g. eu868)
   --timeout <seconds>   Seconds to wait for a command ack (default 25)
+  --json                Print one JSON object on stdout (the result, or the
+                        error); the usual text goes to stderr. For the web UI.
   --catalog <path>      Use a specific mesh-commands.json
   --version             Print this tool's version (mesh-cmd <version>) and exit
 
@@ -725,6 +729,38 @@ def print_usage(file=None):
     (file or sys.stdout).write(_USAGE_GATEWAY if on_gateway() else _USAGE_REMOTE)
 
 
+# --json: one JSON object on stdout, everything else on stderr. Decided before
+# argparse runs, so that usage errors and early sys.exit() calls end in JSON too.
+JSON_MODE = "--json" in sys.argv[1:]
+JSON_OUT = sys.stdout
+if JSON_MODE:
+    sys.stdout = sys.stderr
+
+def emit_json(obj):
+    JSON_OUT.write(json.dumps(obj, sort_keys=True) + "\n")
+    JSON_OUT.flush()
+
+_FIELD = re.compile(r"^([A-Za-z][A-Za-z0-9_.-]*)=(\S*)$")
+
+def reply_fields(text):
+    """'up=45s load=0.2 v=2.1.0' -> {"up": "45s", ...}, or None when the reply
+    is not all key=value tokens (an "ack: ..." line, "pong")."""
+    tokens = text.split()
+    if not tokens:
+        return None
+    fields = {}
+    for t in tokens:
+        m = _FIELD.match(t)
+        if not m:
+            return None
+        fields[m.group(1)] = m.group(2)
+    return fields
+
+def reply_json(et, pl):
+    text = pl.decode(errors="replace").strip()
+    return {"type": et, "text": text, "fields": reply_fields(text)}
+
+
 class UsageParser(argparse.ArgumentParser):
     """Any bad usage prints our block (like the Go CLI's printUsage), not argparse's.
 
@@ -737,6 +773,8 @@ class UsageParser(argparse.ArgumentParser):
     def error(self, message):
         print_usage(sys.stderr)
         sys.stderr.write("\nerror: %s\n" % message)
+        if JSON_MODE:
+            emit_json({"ok": False, "error": message})
         sys.exit(2)
 
 def main():
@@ -756,6 +794,8 @@ def main():
     p.add_argument("--from-gateway", action="store_true",
                    help="read broker/creds/prefix from /run/relay/mqtt-config.toml (run on the Border)")
     p.add_argument("--catalog", help="path to mesh-commands.json (default: bundled next to this script)")
+    p.add_argument("--json", action="store_true",
+                   help="print one JSON object on stdout; the usual text goes to stderr")
     sub = p.add_subparsers(dest="cmd", required=True)
     pr = sub.add_parser("reboot", help="reboot a relay (named command from the catalog)")
     pr.add_argument("relay_id")
@@ -799,6 +839,10 @@ def main():
         print("%-4s %-12s %s" % ("TYPE", "NAME", "DESCRIPTION"))
         for c in sorted(catalog, key=lambda c: c["type"]):
             print("%-4d %-12s %s" % (c["type"], c["name"], c.get("description", "")))
+        if JSON_MODE:
+            emit_json({"ok": True, "commands": [
+                {"type": c["type"], "name": c["name"], "description": c.get("description", "")}
+                for c in sorted(catalog, key=lambda c: c["type"])]})
         return 0
 
     if args.local:
@@ -828,6 +872,11 @@ def main():
             evt_topic = "%s/gateway/%s/event/mesh" % (cfg["prefix"], cfg["border_eui"])
             seen = listen_for_relays(cfg["broker"], cfg["user"], cfg["pass"], evt_topic, args.for_seconds)
         now = time.time()
+        if JSON_MODE:
+            emit_json({"ok": True, "border_eui": cfg["border_eui"], "listened_s": args.for_seconds,
+                       "relays": [{"relay_id": rid, "last_seen_s_ago": int(now - rec["last"]),
+                                   "messages": rec["count"], "via": sorted(rec["via"])}
+                                  for rid, rec in sorted(seen.items(), key=lambda kv: -kv[1]["last"])]})
         if not seen:
             print("\nno relays heard in %ds. Relays announce on their heartbeat interval --"
                   " try a longer --for, or confirm the border is up." % args.for_seconds)
@@ -891,6 +940,7 @@ def main():
           % (cfg["border_eui"], relay_id, ctype, payload.hex() or "(empty)"))
 
     show = args.cmd != "discover"   # discover formats its own output below
+    started = time.time()
     if args.local:
         rc, events = local_send_and_wait(pl, args.timeout, show=show, expect_rid=relay_id)
     else:
@@ -900,10 +950,22 @@ def main():
                                       cmd_topic, evt_topic, pl, args.timeout, show=show,
                                       expect_rid=relay_id)
 
+    result = {"ok": bool(events), "command": args.name if args.cmd == "run" else args.cmd,
+              "type": ctype, "relay_id": relay_id, "border_eui": cfg["border_eui"],
+              "payload_hex": payload.hex(), "acked": bool(events),
+              "elapsed_s": round(time.time() - started, 1), "timeout_s": args.timeout,
+              "replies": [reply_json(et, rpl) for et, rpl in events],
+              "error": None if events else
+                       "no ack within %ds (relay out of range, rebooting, or busy)" % args.timeout}
+
     if args.cmd == "discover":
         resp = next((pl for et, pl in events if et == ctype), None)
         if resp is None:
             print("\n=> no discovery response (relay unreachable, or it doesn't support command %d)" % ctype)
+            if JSON_MODE:
+                result["ok"] = False
+                result["error"] = result["error"] or "no discovery response"
+                emit_json(result)
             return 2
         by_type = {c["type"]: c for c in catalog}
         types = [int(x) for x in resp.decode(errors="replace").replace("\n", "").split(",") if x.strip().isdigit()]
@@ -913,13 +975,32 @@ def main():
             c = by_type.get(t)
             print("%-4d %-14s %s" % (t, c["name"] if c else "(unknown)",
                                      c.get("description", "") if c else "not in local catalog"))
+        if JSON_MODE:
+            result["supported"] = [{"type": t, "name": by_type[t]["name"] if t in by_type else None,
+                                    "description": by_type[t].get("description", "") if t in by_type else ""}
+                                   for t in sorted(types)]
+            emit_json(result)
         return 0
+    if JSON_MODE:
+        emit_json(result)
     return rc
+
+def _run():
+    try:
+        return main()
+    except KeyboardInterrupt:
+        return 130
+    except (OSError, ValueError) as e:
+        sys.exit("error: %s" % e)
 
 if __name__ == "__main__":
     try:
-        sys.exit(main())
-    except KeyboardInterrupt:
-        sys.exit(130)
-    except (OSError, ValueError) as e:
-        sys.exit("error: %s" % e)
+        sys.exit(_run())
+    except SystemExit as e:
+        # sys.exit("error: ...") anywhere: in JSON mode the message becomes the
+        # JSON error. Integer exits already printed their JSON (or need none).
+        if JSON_MODE and isinstance(e.code, str):
+            sys.stderr.write(e.code + "\n")
+            emit_json({"ok": False, "error": e.code[len("error: "):] if e.code.startswith("error: ") else e.code})
+            sys.exit(1)
+        raise
