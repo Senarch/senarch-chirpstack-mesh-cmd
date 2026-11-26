@@ -138,6 +138,10 @@ Environment variables: `MESHCMD_BROKER`, `MESHCMD_USER`, `MESHCMD_PASS`, `MESHCM
 ./mesh-cmd --config mesh-cmd.conf relays
 ./mesh-cmd --config mesh-cmd.conf relays --for 120
 
+# the same as a long-running service: keep a JSON file of every relay heard,
+# with its latest heartbeat path, until stopped (see "Watching relays" below)
+./mesh-cmd --local relays --watch --state-file /run/mesh-cmd/relays.json
+
 # list the command types in this tool's local catalog
 ./mesh-cmd list-commands
 
@@ -187,7 +191,12 @@ senarch-mesh-cmd --local --json run status f117de29
   - Without an answer: `"ok": false`, `"acked": false` and `error` says so.
 - **`discover`** adds `supported`: `[{"type", "name", "description"}]`.
 - **`relays`:** `{"ok", "border_eui", "listened_s", "relays": [{"relay_id",
-  "last_seen_s_ago", "messages", "via"}]}`.
+  "last_seen_s_ago", "messages", "via", "path", "path_heard_s_ago"}]}`.
+  - `path`: the relay's latest heartbeat path, `[{"relay_id", "rssi", "snr"}]`
+    from the first forwarding relay to the last; `[]` when the border heard
+    the relay directly; `null` when no heartbeat was heard (only uplinks or
+    command replies). See [Heartbeat paths](#heartbeat-paths).
+  - `path_heard_s_ago`: seconds since that heartbeat, or `null`.
 - **`list-commands`:** `{"ok": true, "commands": [{"type", "name", "description"}]}`.
 - **Errors**, including bad arguments: `{"ok": false, "error": "<message>"}`.
 
@@ -250,16 +259,57 @@ You don't need ChirpStack (or any web UI) to find your relays. A Border Gateway 
 
 ```
 $ ./mesh-cmd --config mesh-cmd.conf relays
-listening on eu868/gateway/0016c001aabbccdd/event/mesh for 330s...
+listening on eu868/gateway/0016c001aabbccdd/event/mesh for 630s...
 connected.
   + 11223344
+  + 55667788
+  + 99aabbcc
 
-heard 1 relay(s):
-RELAY_ID   LAST_SEEN   MSGS  VIA
-11223344   78s ago     3     heartbeat,proprietary
+heard 3 relay(s):
+RELAY_ID   LAST_SEEN   MSGS  VIA                    PATH
+11223344   78s ago     3     heartbeat,proprietary  direct
+55667788   140s ago    1     heartbeat              via 11223344 (-92 dBm, SNR 7)
+99aabbcc   302s ago    2     proprietary            no heartbeat heard
 ```
 
-`VIA` shows how the relay was heard (`heartbeat` and/or a relayed/`proprietary` event). Relays announce on their heartbeat interval (SenOS default **5 minutes**), so `relays` listens for 330s by default to catch each relay at least once. Shorten with `--for <seconds>` if the network also carries uplink traffic (relayed uplinks reveal a relay_id immediately). Then feed a discovered id into `discover` / `run status` / `run power`.
+`VIA` shows how the relay was heard (`heartbeat` and/or a relayed/`proprietary` event). `PATH` shows the route of the relay's latest heartbeat (see [Heartbeat paths](#heartbeat-paths)). Relays announce on their heartbeat interval (SenOS default **10 minutes**), so `relays` listens for 630s by default to catch each relay at least once. Shorten with `--for <seconds>` if the network also carries uplink traffic (relayed uplinks reveal a relay_id immediately). Then feed a discovered id into `discover` / `run status` / `run power`.
+
+### Heartbeat paths
+
+A relay sends its heartbeat (`gw.MeshEventHeartbeat`) with an empty `relay_path`. Each relay that forwards it on the way to the border appends its own relay_id with the RSSI and SNR at which **it** heard the packet. The border adds nothing. So:
+
+- `direct`: the path is empty; the border heard the relay itself.
+- `via A (-92 dBm, SNR 7)`: relay A heard the heartbeat at -92 dBm, SNR 7, and forwarded it to the border.
+- `via A (…) -> B (…)`: two forwarders, listed in the order the heartbeat travelled. A's numbers are how well A heard the relay, B's are how well B heard A. How well the border heard the last hop is not in the heartbeat.
+- `no heartbeat heard`: the relay showed up only through relayed uplinks or command replies, which carry no path. Listen for a full heartbeat interval to get one.
+
+Only the latest heartbeat counts; the path can change from one heartbeat to the next as radio conditions change.
+
+### Watching relays (`--watch`, for a service)
+
+A program that shows the mesh, such as a web UI, cannot wait one heartbeat interval for each look. `relays --watch --state-file <file>` runs until it is stopped and keeps `<file>` up to date instead:
+
+```bash
+mesh-cmd --local relays --watch --state-file /run/mesh-cmd/relays.json
+```
+
+```json
+{"updated": 1764000123,
+ "relays": {"55667788": {"last_seen": 1764000120, "count": 14,
+                         "kinds": ["heartbeat", "proprietary"],
+                         "path": [{"relay_id": "11223344", "rssi": -92, "snr": 7}],
+                         "path_heard": 1764000002},
+            "99aabbcc": {"last_seen": 1764000101, "count": 2, "kinds": ["proprietary"],
+                         "path": null, "path_heard": null}}}
+```
+
+- Times are Unix epochs in whole seconds, not ages, so the reader works out the age itself. `updated` is when the file was written.
+- `kinds` is the same as `via` in `relays --json`. `path` follows the same rules (`[]` = direct, `null` = no heartbeat yet). A relay keeps its last known path when later messages are not heartbeats.
+- The file is replaced atomically (written to `<file>.tmp`, then renamed), at most once a second; bursts of messages are folded into one write.
+- On start it loads the file if one exists, so a restart keeps what it knew. Relays not heard for over 24 hours are dropped.
+- Logs go to stderr: a few lines at start, then one line per heartbeat (`heartbeat 55667788 via 11223344 (-92 dBm, SNR 7)`).
+- SIGTERM or ctrl-c stops it with exit code 0. With `--local`, a gap in events or a restart of gateway-mesh ends nothing: the ZMQ socket reconnects by itself. Over MQTT it exits 1 when the broker drops the connection, so a service manager (systemd `Restart=on-failure`) can start it again.
+- `--watch` needs `--state-file`, and does not take `--for` or `--json`.
 
 ## Which commands can I send?
 
@@ -287,6 +337,14 @@ That way a leaked operator machine cannot impersonate a gateway or read device t
 ## How it works
 
 `mesh-cmd` builds a `gw.MeshCommand` protobuf `{ gateway_id, relay_id, commands:[{ proprietary:{ command_type, payload } }] }`, publishes it to `<prefix>/gateway/<border_eui>/command/mesh`, subscribes to `<prefix>/gateway/<border_eui>/event/mesh`, and decodes the returned `gw.MeshEvent` ack. The relay must have the matching command type configured (`[commands.commands]`), and both gateways must share the mesh `root_key` (the command is authenticated + encrypted with it).
+
+## Tests
+
+Standard library only, no gateway needed:
+
+```bash
+python3 -m unittest discover -s tests
+```
 
 ## License
 
