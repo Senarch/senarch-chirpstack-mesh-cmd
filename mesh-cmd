@@ -30,6 +30,7 @@ import argparse
 import configparser
 import os
 import re
+import signal
 import socket
 import ssl
 import json
@@ -108,7 +109,33 @@ def _fields(b):
         elif wt == 1: out.append((f, 1, b[i:i+8])); i += 8
         else: break
     return out
+def _int32(v):
+    """A protobuf int32 from the unsigned varint _rv returned. A negative int32
+    is sent sign-extended to 64 bits (a 10-byte varint); keep the low 32 bits
+    and read them as two's complement, as protobuf decoders do."""
+    v &= 0xFFFFFFFF
+    return v - (1 << 32) if v & 0x80000000 else v
+def decode_relay_path(b):
+    """MeshEventHeartbeat -> [{"relay_id", "rssi", "snr"}, ...] (relay_path = 4).
+
+    A relay sends its heartbeat with an empty path. Each relay that forwards it
+    appends itself with the RSSI and SNR at which it heard the packet; the
+    border adds nothing. So [] means the border heard the relay directly, and
+    the entries run from the first forwarder to the last."""
+    path = []
+    for f, wt, v in _fields(b):
+        if f == 4 and wt == 2:                       # MeshEventHeartbeatRelayPath
+            hop = {"relay_id": "", "rssi": 0, "snr": 0}
+            for f2, wt2, v2 in _fields(v):
+                if f2 == 1 and wt2 == 2: hop["relay_id"] = v2.decode(errors="replace")
+                if f2 == 2 and wt2 == 0: hop["rssi"] = _int32(v2)
+                if f2 == 3 and wt2 == 0: hop["snr"] = _int32(v2)
+            path.append(hop)
+    return path
 def decode_mesh_event(b):
+    """gw.MeshEvent -> (relay_id, events). Each event is a (kind, type, data)
+    tuple: ("proprietary", event_type, payload_bytes), or
+    ("heartbeat", None, relay_path) with relay_path from decode_relay_path()."""
     relay_id = None; evs = []
     for f, wt, v in _fields(b):
         if f == 2 and wt == 2: relay_id = v.decode(errors="replace")
@@ -120,8 +147,8 @@ def decode_mesh_event(b):
                         if f3 == 1 and wt3 == 0: et = v3
                         if f3 == 2 and wt3 == 2: pl = v3
                     evs.append(("proprietary", et, pl))
-                elif f2 == 2 and wt2 == 2:
-                    evs.append(("heartbeat", None, b""))
+                elif f2 == 2 and wt2 == 2:           # heartbeat
+                    evs.append(("heartbeat", None, decode_relay_path(v2)))
     return relay_id, evs
 
 # ---------------- minimal MQTT 3.1.1 ----------------
@@ -133,10 +160,17 @@ def _rl(n):
         o.append(d | 0x80 if n else d)
         if not n:
             return bytes(o)
+def _recv_some(sock, n):
+    """recv() that raises on a closed connection instead of returning b"",
+    which would otherwise spin forever in the read loops below."""
+    b = sock.recv(n)
+    if not b:
+        raise ConnectionError("the broker closed the connection")
+    return b
 def _read_rl(sock):
     n = s = 0
     while True:
-        c = sock.recv(1)[0]; n |= (c & 0x7F) << s
+        c = _recv_some(sock, 1)[0]; n |= (c & 0x7F) << s
         if not c & 0x80:
             return n
         s += 7
@@ -146,7 +180,7 @@ def _read_pkt(sock):
         return None, None
     ln = _read_rl(sock); buf = b""
     while len(buf) < ln:
-        buf += sock.recv(ln - len(buf))
+        buf += _recv_some(sock, ln - len(buf))
     return h[0], buf
 
 def _mqtt_connect_subscribe(broker, user, pw, sub_topic):
@@ -218,55 +252,53 @@ def publish_and_wait(broker, user, pw, cmd_topic, evt_topic, payload, wait, show
                          else "no ack within %ds (relay may be out of range / rebooting; check its journal)" % wait))
     return (0 if events else 2), events
 
-def listen_for_relays(broker, user, pw, evt_topic, duration):
-    """Passively listen on the border's mesh event topic and collect the
-    relay_ids heard. Relays announce themselves via periodic heartbeats;
-    relayed uplinks also carry the originating relay_id. No command is sent.
-    Returns {relay_id: {"count", "last", "via"}}."""
-    print("listening on %s for %ds..." % (evt_topic, duration))
-    sock = _mqtt_connect_subscribe(broker, user, pw, evt_topic)
-    print("(relays announce on their heartbeat interval -- SenOS default 10m; a relay with sensor"
-          " traffic shows up sooner, its relayed uplinks carry its relay_id; ctrl-c to stop early)")
+# Set by SIGTERM/SIGINT in --watch. Both listeners, mqtt_mesh_events() and
+# local_mesh_events(), end within a second of it.
+stop_requested = False
 
-    seen = {}
-    deadline = time.time() + duration
+def _request_stop(_signum, _frame):
+    global stop_requested
+    stop_requested = True
+
+def mqtt_mesh_events(broker, user, pw, evt_topic, duration=None):
+    """Passively listen on the border's mesh event topic. No command is sent.
+
+    Yields (relay_id, events) for each mesh event, and None after every quiet
+    second so the caller can do timed work. Ends after `duration` seconds (None:
+    no limit), when the broker drops the connection, on ctrl-c, or once
+    stop_requested is set."""
+    sock = _mqtt_connect_subscribe(broker, user, pw, evt_topic)
+    deadline = time.time() + duration if duration is not None else None
     last_ping = time.time()
-    while time.time() < deadline:
-        sock.settimeout(min(5.0, max(0.1, deadline - time.time())))
-        try:
-            t, b = _read_pkt(sock)
-        except (socket.timeout, ssl.SSLWantReadError):
-            t, b = -1, None            # idle slice; fall through to keepalive
-        except OSError:
-            break
-        except KeyboardInterrupt:
-            print("  (stopped)")
-            break
-        if t is None:                  # broker closed the connection
-            break
-        if t != -1 and (t & 0xF0) == 0x30:   # PUBLISH
-            tlen = struct.unpack("!H", b[:2])[0]
-            rid, evs = decode_mesh_event(b[2+tlen:])
-            if rid:
-                rec = seen.setdefault(rid, {"count": 0, "last": 0.0, "via": set()})
-                rec["count"] += 1
-                rec["last"] = time.time()
-                for kind, _et, _pl in evs:
-                    rec["via"].add(kind)
-                if rec["count"] == 1:
-                    print("  + %s" % rid)
-        if time.time() - last_ping > 20:
+    try:
+        while not stop_requested and (deadline is None or time.time() < deadline):
+            sock.settimeout(1.0 if deadline is None else min(1.0, max(0.1, deadline - time.time())))
             try:
-                sock.sendall(bytes([0xC0, 0x00]))  # PINGREQ (stay under keepalive)
+                t, b = _read_pkt(sock)
+            except (socket.timeout, ssl.SSLWantReadError):
+                t, b = -1, None            # idle slice; fall through to keepalive
             except OSError:
                 break
-            last_ping = time.time()
-
-    try:
-        sock.sendall(bytes([0xE0, 0x00]))          # DISCONNECT
-    except OSError:
-        pass
-    return seen
+            if t is None:                  # broker closed the connection
+                break
+            if t != -1 and (t & 0xF0) == 0x30:   # PUBLISH
+                tlen = struct.unpack("!H", b[:2])[0]
+                yield decode_mesh_event(b[2+tlen:])
+            else:
+                yield None
+            if time.time() - last_ping > 20:
+                try:
+                    sock.sendall(bytes([0xC0, 0x00]))  # PINGREQ (stay under keepalive)
+                except OSError:
+                    break
+                last_ping = time.time()
+    except KeyboardInterrupt:
+        print("  (stopped)")
+    finally:
+        try:
+            sock.sendall(bytes([0xE0, 0x00]))      # DISCONNECT
+        except OSError:
+            pass
 
 # ---------------- local transport: ZMQ to gateway-mesh ----------------
 # On the Border itself no broker is needed. MQTT is only how the request reaches
@@ -376,33 +408,131 @@ def local_send_and_wait(payload, wait, show=True, expect_rid=None):
                          else "no ack within %ds (relay may be out of range / rebooting; check its journal)" % wait))
     return (0 if events else 2), events
 
-def local_listen_for_relays(duration):
-    """--local equivalent of listen_for_relays()."""
-    print("listening on %s for %ds..." % (LOCAL_EVENT_URL, duration))
-    print("(relays announce on their heartbeat interval -- SenOS default 10m; a relay with sensor"
-          " traffic shows up sooner, its relayed uplinks carry its relay_id; ctrl-c to stop early)")
+def local_mesh_events(duration=None):
+    """--local equivalent of mqtt_mesh_events(), same contract. The SUB socket
+    stays open throughout, and ZMQ reconnects it by itself if gateway-mesh
+    restarts, so a gap in events ends nothing."""
     sub = _local_sub()
-    seen = {}
-    deadline = time.time() + duration
+    deadline = time.time() + duration if duration is not None else None
     try:
-        while time.time() < deadline:
-            remaining = max(0, int((deadline - time.time()) * 1000))
-            if not sub.poll(remaining):
-                continue
-            rid, evs = decode_event_mesh(sub.recv())
-            if not rid:
-                continue
-            rec = seen.setdefault(rid, {"count": 0, "last": 0.0, "via": set()})
-            rec["count"] += 1
-            rec["last"] = time.time()
-            for kind, _et, _pl in evs:
-                rec["via"].add(kind)
-            if rec["count"] == 1:
-                print("  + %s" % rid)
+        while not stop_requested and (deadline is None or time.time() < deadline):
+            wait = 1.0 if deadline is None else min(1.0, max(0.0, deadline - time.time()))
+            if sub.poll(int(wait * 1000)):
+                yield decode_event_mesh(sub.recv())
+            else:
+                yield None
     except KeyboardInterrupt:
         print("  (stopped)")
-    sub.close()
-    return seen
+    finally:
+        sub.close()
+
+# ---------------- relays: who the border hears, and by which path ----------------
+# One record per relay, in the shape --state-file stores it (epochs in whole
+# seconds, which any JSON reader takes as an integer):
+#   {"last_seen": epoch, "count": n, "kinds": ["heartbeat", ...],
+#    "path": [{"relay_id", "rssi", "snr"}, ...] or None, "path_heard": epoch or None}
+# path None = no heartbeat heard yet; [] = heard directly by the border.
+
+def record_relay_message(relays, rid, evs, now):
+    """Fold one mesh event from relay `rid` into `relays`. A later message that
+    is not a heartbeat keeps the last known path. Returns the heartbeat path
+    this message carried, or None."""
+    rec = relays.setdefault(rid, {"last_seen": now, "count": 0, "kinds": [],
+                                  "path": None, "path_heard": None})
+    rec["count"] += 1
+    rec["last_seen"] = now
+    heard = None
+    for kind, _et, data in evs:
+        if kind not in rec["kinds"]:
+            rec["kinds"] = sorted(rec["kinds"] + [kind])
+        if kind == "heartbeat":
+            rec["path"], rec["path_heard"] = data, now
+            heard = data
+    return heard
+
+def format_path(path):
+    """A relay's heartbeat path as text, e.g. 'via f117f198 (-92 dBm, SNR 7)'."""
+    if path is None:
+        return "no heartbeat heard"
+    if not path:
+        return "direct"
+    return "via " + " -> ".join("%s (%d dBm, SNR %d)" % (h["relay_id"], h["rssi"], h["snr"])
+                                for h in path)
+
+LISTEN_HINT = ("(relays announce on their heartbeat interval -- SenOS default 10m; a relay with sensor"
+               " traffic shows up sooner, its relayed uplinks carry its relay_id; ctrl-c to stop early)")
+
+def collect_relays(messages):
+    """Fold every message into a fresh relays dict; for the one-shot listing."""
+    relays = {}
+    for msg in messages:
+        if msg and msg[0]:
+            rid, evs = msg
+            record_relay_message(relays, rid, evs, int(time.time()))
+            if relays[rid]["count"] == 1:
+                print("  + %s" % rid)
+    return relays
+
+# --watch: keep a state file up to date for a long-running service.
+STATE_MAX_AGE_S = 24 * 3600     # drop relays not heard for longer than this
+STATE_WRITE_EVERY_S = 1.0       # at most one write per second; bursts coalesce
+
+def load_state(path):
+    """The relays a previous run left in `path`, so a restart keeps them."""
+    try:
+        with open(path) as f:
+            relays = json.load(f).get("relays")
+    except FileNotFoundError:
+        return {}
+    except (ValueError, AttributeError) as e:
+        print("state file %s is not valid, starting empty (%s)" % (path, e))
+        return {}
+    return relays if isinstance(relays, dict) else {}
+
+def prune_state(relays, now):
+    """Drop relays not heard for over STATE_MAX_AGE_S. Returns True if any went."""
+    old = [rid for rid, rec in relays.items() if now - rec.get("last_seen", 0) > STATE_MAX_AGE_S]
+    for rid in old:
+        del relays[rid]
+    return bool(old)
+
+def write_state(path, relays, now):
+    """Replace `path` atomically: a reader sees the old file or the new one."""
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump({"updated": now, "relays": relays}, f, sort_keys=True)
+        f.write("\n")
+    os.replace(tmp, path)
+
+def watch_relays(messages, state_file):
+    """Run until stopped, keeping state_file up to date with every relay heard.
+    Returns 0 when stopped by a signal, 1 if the event stream ended by itself
+    (the broker dropped the connection) so a service manager restarts it."""
+    relays = load_state(state_file)
+    prune_state(relays, int(time.time()))
+    write_state(state_file, relays, int(time.time()))   # a bad path fails now, not later
+    print("watching; %d relay(s) loaded, state in %s" % (len(relays), state_file))
+    last_write, dirty = time.time(), False
+    for msg in messages:
+        now = time.time()
+        if msg and msg[0]:
+            rid, evs = msg
+            path = record_relay_message(relays, rid, evs, int(now))
+            dirty = True
+            if path is not None:
+                print("heartbeat %s %s" % (rid, format_path(path)))
+        if prune_state(relays, int(now)):
+            dirty = True
+        if dirty and now - last_write >= STATE_WRITE_EVERY_S:
+            write_state(state_file, relays, int(now))
+            last_write, dirty = now, False
+    if dirty:
+        write_state(state_file, relays, int(time.time()))
+    if stop_requested:
+        print("stopped")
+        return 0
+    print("error: the event stream ended (lost the broker connection)")
+    return 1
 
 # ---------------- config resolution ----------------
 def default_config_path():
@@ -592,7 +722,11 @@ _USAGE_COMMANDS = """Commands:
   gps-status <relay_id>          Report GPS acquisition status + the persisted location
   run <name> <relay_id> [hex]    Run a named catalog command (status, power, version, restart-stack)
   discover <relay_id>            Ask a relay which command types it has configured
-  relays                         List relay_ids the Border is hearing (passive; no relay_id needed)
+  relays                         List relay_ids the Border is hearing, each with its latest
+                                 heartbeat path (passive; no relay_id needed)
+  relays --watch --state-file <file>
+                                 Run until stopped, keeping <file> up to date with every
+                                 relay heard (JSON; for a long-running service)
   send <relay_id> <type> [hex]   Send a raw proprietary command (128-255) + optional hex payload
   list-commands                  Print this tool's local command catalog
 """
@@ -836,10 +970,33 @@ def main():
     pd = sub.add_parser("discover", help="ask a relay which command types it has configured (mesh discovery)")
     pd.add_argument("relay_id")
     prl = sub.add_parser("relays", help="list relay_ids the border is hearing (passive mesh discovery)")
-    prl.add_argument("--for", dest="for_seconds", type=int, default=630, metavar="SECONDS",
+    prl.add_argument("--for", dest="for_seconds", type=int, default=None, metavar="SECONDS",
                      help="seconds to listen (default 630 = one 10m SenOS heartbeat interval + margin;"
                           " relays with sensor traffic show up sooner)")
+    prl.add_argument("--watch", action="store_true",
+                     help="run until stopped, keeping --state-file up to date")
+    prl.add_argument("--state-file", dest="state_file", metavar="FILE",
+                     help="with --watch: the JSON file to keep up to date (loaded on start)")
     args = p.parse_args()
+
+    watching = args.cmd == "relays" and args.watch
+    if args.cmd == "relays":
+        if args.watch and not args.state_file:
+            p.error("--watch needs --state-file")
+        if args.state_file and not args.watch:
+            p.error("--state-file only goes with --watch")
+        if args.watch and args.for_seconds is not None:
+            p.error("--watch runs until stopped; leave out --for")
+        if args.watch and JSON_MODE:
+            p.error("--watch writes its JSON to --state-file; leave out --json")
+        if args.for_seconds is None:
+            args.for_seconds = 630
+    if watching:
+        # A service: logs on stderr (line-buffered, so journald gets each line
+        # as it happens), and a clean exit 0 on SIGTERM.
+        sys.stdout = sys.stderr
+        signal.signal(signal.SIGTERM, _request_stop)
+        signal.signal(signal.SIGINT, _request_stop)
 
     catalog = load_catalog(args.catalog)
 
@@ -858,7 +1015,9 @@ def main():
         # the border's own EUI, which gateway-mesh can be asked for directly.
         cfg = {"broker": None, "user": None, "pass": None, "prefix": None,
                "border_eui": (args.border_eui or "").lower() or None}
-        if not cfg["border_eui"]:
+        # --watch only listens: it needs no EUI, and so starts even while
+        # gateway-mesh is down (the SUB socket connects once it is up).
+        if not cfg["border_eui"] and not watching:
             cfg["border_eui"] = local_border_eui()
             if not cfg["border_eui"]:
                 sys.exit("error: could not read the border gateway id from gateway-mesh")
@@ -874,26 +1033,37 @@ def main():
                      % ", ".join(missing))
 
     if args.cmd == "relays":
+        duration = None if watching else args.for_seconds
         if args.local:
-            seen = local_listen_for_relays(args.for_seconds)
+            print("listening on %s%s..." % (LOCAL_EVENT_URL, "" if watching else " for %ds" % duration))
+            messages = local_mesh_events(duration)
         else:
             evt_topic = "%s/gateway/%s/event/mesh" % (cfg["prefix"], cfg["border_eui"])
-            seen = listen_for_relays(cfg["broker"], cfg["user"], cfg["pass"], evt_topic, args.for_seconds)
-        now = time.time()
+            print("listening on %s%s..." % (evt_topic, "" if watching else " for %ds" % duration))
+            messages = mqtt_mesh_events(cfg["broker"], cfg["user"], cfg["pass"], evt_topic, duration)
+        if watching:
+            return watch_relays(messages, args.state_file)
+        print(LISTEN_HINT)
+        seen = collect_relays(messages)
+        now = int(time.time())
+        newest_first = sorted(seen.items(), key=lambda kv: -kv[1]["last_seen"])
         if JSON_MODE:
             emit_json({"ok": True, "border_eui": cfg["border_eui"], "listened_s": args.for_seconds,
-                       "relays": [{"relay_id": rid, "last_seen_s_ago": int(now - rec["last"]),
-                                   "messages": rec["count"], "via": sorted(rec["via"])}
-                                  for rid, rec in sorted(seen.items(), key=lambda kv: -kv[1]["last"])]})
+                       "relays": [{"relay_id": rid, "last_seen_s_ago": now - rec["last_seen"],
+                                   "messages": rec["count"], "via": rec["kinds"],
+                                   "path": rec["path"],
+                                   "path_heard_s_ago": (now - rec["path_heard"]
+                                                        if rec["path_heard"] is not None else None)}
+                                  for rid, rec in newest_first]})
         if not seen:
             print("\nno relays heard in %ds. Relays announce on their heartbeat interval --"
                   " try a longer --for, or confirm the border is up." % args.for_seconds)
             return 2
         print("\nheard %d relay(s):" % len(seen))
-        print("%-10s %-11s %-5s %s" % ("RELAY_ID", "LAST_SEEN", "MSGS", "VIA"))
-        for rid, rec in sorted(seen.items(), key=lambda kv: -kv[1]["last"]):
-            print("%-10s %-11s %-5d %s" % (rid, "%ds ago" % int(now - rec["last"]),
-                                           rec["count"], ",".join(sorted(rec["via"])) or "-"))
+        print("%-10s %-11s %-5s %-22s %s" % ("RELAY_ID", "LAST_SEEN", "MSGS", "VIA", "PATH"))
+        for rid, rec in newest_first:
+            print("%-10s %-11s %-5d %-22s %s" % (rid, "%ds ago" % (now - rec["last_seen"]), rec["count"],
+                                                 ",".join(rec["kinds"]) or "-", format_path(rec["path"])))
         print("\ntip: target one with e.g.  mesh-cmd --config <conf> discover <relay_id>")
         return 0
 
