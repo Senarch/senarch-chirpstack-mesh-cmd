@@ -722,8 +722,9 @@ _USAGE_COMMANDS = """Commands:
   gps-status <relay_id>          Report GPS acquisition status + the persisted location
   run <name> <relay_id> [hex]    Run a named catalog command (status, power, version, restart-stack)
   discover <relay_id>            Ask a relay which command types it has configured
-  relays                         List relay_ids the Border is hearing, each with its latest
-                                 heartbeat path (passive; no relay_id needed)
+  relays [--for <s>]             List relay_ids the Border is hearing, each with its latest
+                                 heartbeat path (passive; no relay_id needed). Listens 630 s
+                                 by default: one SenOS heartbeat interval (10 min) + margin
   relays --watch --state-file <file>
                                  Run until stopped, keeping <file> up to date with every
                                  relay heard (JSON; for a long-running service)
