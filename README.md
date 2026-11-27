@@ -22,7 +22,7 @@ It also needs no configuration: the Border's own EUI is read from `gateway-mesh`
 ```bash
 # on the Border, over SSH or WireGuard
 senarch-mesh-cmd --local ping <relay_id>
-senarch-mesh-cmd --local relays --for 630
+senarch-mesh-cmd --local relays
 senarch-mesh-cmd --local gps-status <relay_id>
 ```
 
@@ -132,9 +132,11 @@ Environment variables: `MESHCMD_BROKER`, `MESHCMD_USER`, `MESHCMD_PASS`, `MESHCM
 ./mesh-cmd --config mesh-cmd.conf discover 11223344
 
 # don't know the relay_ids? list every relay the Border is currently hearing
-# (passive -- sends nothing, no relay_id needed; listens ~one heartbeat interval,
-# 630 s by default = SenOS's 10 min plus margin; a relay with sensor traffic shows
-# up sooner, because every relayed uplink carries its relay_id)
+# (passive -- sends nothing, no relay_id needed; listens two heartbeat intervals,
+# 1230 s by default = twice SenOS's 10 min plus margin, so one lost heartbeat does
+# not hide a relay; a relay with sensor traffic shows up sooner, because every
+# relayed uplink carries its relay_id; a relay set to a longer interval needs a
+# longer --for)
 ./mesh-cmd --config mesh-cmd.conf relays
 ./mesh-cmd --config mesh-cmd.conf relays --for 120
 
@@ -259,7 +261,7 @@ You don't need ChirpStack (or any web UI) to find your relays. A Border Gateway 
 
 ```
 $ ./mesh-cmd --config mesh-cmd.conf relays
-listening on eu868/gateway/0016c001aabbccdd/event/mesh for 630s...
+listening on eu868/gateway/0016c001aabbccdd/event/mesh for 1230s...
 connected.
   + 11223344
   + 55667788

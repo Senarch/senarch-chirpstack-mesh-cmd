@@ -21,14 +21,17 @@ class RelaysUsage(unittest.TestCase):
     def test_usage_names_for_and_its_default(self):
         text = mesh._USAGE_COMMANDS
         self.assertIn("relays [--for <s>]", text)
-        self.assertIn("630 s", text)
+        self.assertIn("1230 s", text)
         self.assertIn("10 min", text)
 
     def test_relays_help_prints_it(self):
         out = subprocess.run([sys.executable, _SCRIPT, "relays", "--help"],
                              capture_output=True, text=True).stdout
         self.assertIn("relays [--for <s>]", out)
-        self.assertIn("630 s", out)
+        self.assertIn("1230 s", out)
+
+    def test_default_listen_covers_two_heartbeats(self):
+        self.assertEqual(mesh.RELAYS_LISTEN_S, 2 * 600 + 30)
 
 
 if __name__ == "__main__":

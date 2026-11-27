@@ -459,6 +459,10 @@ def format_path(path):
     return "via " + " -> ".join("%s (%d dBm, SNR %d)" % (h["relay_id"], h["rssi"], h["snr"])
                                 for h in path)
 
+# Two SenOS heartbeat intervals (10 min) plus margin, so one lost heartbeat does
+# not hide a relay.
+RELAYS_LISTEN_S = 1230
+
 LISTEN_HINT = ("(relays announce on their heartbeat interval -- SenOS default 10m; a relay with sensor"
                " traffic shows up sooner, its relayed uplinks carry its relay_id; ctrl-c to stop early)")
 
@@ -723,8 +727,9 @@ _USAGE_COMMANDS = """Commands:
   run <name> <relay_id> [hex]    Run a named catalog command (status, power, version, restart-stack)
   discover <relay_id>            Ask a relay which command types it has configured
   relays [--for <s>]             List relay_ids the Border is hearing, each with its latest
-                                 heartbeat path (passive; no relay_id needed). Listens 630 s
-                                 by default: one SenOS heartbeat interval (10 min) + margin
+                                 heartbeat path (passive; no relay_id needed). Listens 1230 s
+                                 by default: two SenOS heartbeat intervals (10 min) + margin,
+                                 so one lost heartbeat does not hide a relay
   relays --watch --state-file <file>
                                  Run until stopped, keeping <file> up to date with every
                                  relay heard (JSON; for a long-running service)
@@ -972,8 +977,9 @@ def main():
     pd.add_argument("relay_id")
     prl = sub.add_parser("relays", help="list relay_ids the border is hearing (passive mesh discovery)")
     prl.add_argument("--for", dest="for_seconds", type=int, default=None, metavar="SECONDS",
-                     help="seconds to listen (default 630 = one 10m SenOS heartbeat interval + margin;"
-                          " relays with sensor traffic show up sooner)")
+                     help="seconds to listen (default %d = two 10m SenOS heartbeat intervals + margin,"
+                          " so one lost heartbeat does not hide a relay; relays with sensor traffic show"
+                          " up sooner; a relay with a longer interval needs a longer --for)" % RELAYS_LISTEN_S)
     prl.add_argument("--watch", action="store_true",
                      help="run until stopped, keeping --state-file up to date")
     prl.add_argument("--state-file", dest="state_file", metavar="FILE",
@@ -991,7 +997,7 @@ def main():
         if args.watch and JSON_MODE:
             p.error("--watch writes its JSON to --state-file; leave out --json")
         if args.for_seconds is None:
-            args.for_seconds = 630
+            args.for_seconds = RELAYS_LISTEN_S
     if watching:
         # A service: logs on stderr (line-buffered, so journald gets each line
         # as it happens), and a clean exit 0 on SIGTERM.
