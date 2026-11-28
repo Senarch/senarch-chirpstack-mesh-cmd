@@ -111,6 +111,16 @@ Environment variables: `MESHCMD_BROKER`, `MESHCMD_USER`, `MESHCMD_PASS`, `MESHCM
 # can be lost although the relay applies it; check with `run status`.
 ./mesh-cmd --config mesh-cmd.conf set-enforce-dc 11223344 on
 
+# LoRaWAN only: drop frames that are neither a data uplink with a DevAddr nor a
+# join request with a JoinEUI. Those always pass the prefix filters otherwise.
+# "on" also drops LoRaWAN 1.1 rejoin requests. "off" (the default) lets them pass.
+./mesh-cmd --config mesh-cmd.conf set-lorawan-only 11223344 on
+
+# join requests the relay forwards per device (DevEUI) per hour, counted for the
+# sensors it hears itself: 0-100, 0 = no limit, default 4. Stops a sensor that
+# never gets a join accept from using up the relay's duty cycle. Persisted.
+./mesh-cmd --config mesh-cmd.conf set-join-limit 11223344 2
+
 # open a mesh-only relay's WiFi window for N minutes (default 30) to reach it, then close it
 ./mesh-cmd --config mesh-cmd.conf open-wifi 11223344 30
 ./mesh-cmd --config mesh-cmd.conf close-wifi 11223344
@@ -248,6 +258,12 @@ Each `send` below is exactly equivalent to the named subcommand next to it:
 
 # enforce duty cycle (type 156, payload "on")      == set-enforce-dc 11223344 on
 ./mesh-cmd send 11223344 156 6f6e
+
+# LoRaWAN only (type 157, payload "on")            == set-lorawan-only 11223344 on
+./mesh-cmd send 11223344 157 6f6e
+
+# join limit 2 (type 158, payload "2"=0x32)        == set-join-limit 11223344 2
+./mesh-cmd send 11223344 158 32
 
 # open WiFi for 30 min (type 129, payload "30")    == open-wifi 11223344 30
 ./mesh-cmd send 11223344 129 3330
