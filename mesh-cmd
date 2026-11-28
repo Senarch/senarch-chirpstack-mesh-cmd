@@ -722,6 +722,10 @@ _USAGE_COMMANDS = """Commands:
                                  Also apply the relay's filters to the uplinks it repeats
                                  from other relays (on), or only to the sensors it hears
                                  itself (off, default)
+  set-enforce-dc <relay_id> on|off
+                                 Enforce the relay's duty cycle (on: drop a frame that
+                                 would exceed its band's budget) or only track it (off,
+                                 default)
   open-wifi <relay_id> [min]     Open the relay's WiFi window for N minutes (default 30)
   close-wifi <relay_id>          Force the relay's WiFi off now
   open-lte <relay_id> [min]      Turn the relay's LTE on for N minutes (default 30)
@@ -798,6 +802,7 @@ Examples:
                                               # pure mesh repeater
   mesh-cmd --local set-filter-relayed 11223344 on
                                               # filter other relays' uplinks too
+  mesh-cmd --local set-enforce-dc 11223344 on # enforce its duty cycle
   mesh-cmd --local open-wifi 11223344 30      # open WiFi 30 min (close-wifi to force off)
   mesh-cmd --local open-lte 11223344 60       # LTE on 60 min (close-lte to turn it off)
   mesh-cmd --local gps-fix 11223344           # acquire a fix; poll with gps-status
@@ -846,6 +851,7 @@ Examples (with a mesh-cmd.conf in the current directory):
                                       # pure mesh repeater
   mesh-cmd set-filter-relayed 11223344 on
                                       # filter other relays' uplinks too
+  mesh-cmd set-enforce-dc 11223344 on # enforce its duty cycle
   mesh-cmd open-wifi 11223344 30      # open WiFi 30 min (close-wifi to force off)
   mesh-cmd open-lte 11223344 60       # LTE on 60 min (close-lte to turn it off)
   mesh-cmd gps-fix 11223344           # acquire a GPS fix (default 70 min)
@@ -966,6 +972,9 @@ def main():
     pfr = sub.add_parser("set-filter-relayed",
                          help="also apply the relay's filters to uplinks it repeats from other relays (on) or not (off), persisted")
     pfr.add_argument("relay_id"); pfr.add_argument("state", choices=["on", "off"])
+    ped = sub.add_parser("set-enforce-dc",
+                         help="enforce the relay's duty cycle (on) or only track it (off), persisted")
+    ped.add_argument("relay_id"); ped.add_argument("state", choices=["on", "off"])
     po = sub.add_parser("open-wifi", help="open the relay's WiFi window for N minutes (default 30)")
     po.add_argument("relay_id"); po.add_argument("minutes", type=int, nargs="?", default=None)
     pc = sub.add_parser("close-wifi", help="force the relay's WiFi off now")
@@ -1109,6 +1118,8 @@ def main():
         ctype, payload = named_type("set-direct-uplink"), args.state.encode()
     elif args.cmd == "set-filter-relayed":
         ctype, payload = named_type("set-filter-relayed"), args.state.encode()
+    elif args.cmd == "set-enforce-dc":
+        ctype, payload = named_type("set-enforce-dc"), args.state.encode()
     elif args.cmd == "open-wifi":
         if args.minutes is not None and not (1 <= args.minutes <= 720):
             sys.exit("error: minutes must be 1-720 (or omit for the relay default of 30)")

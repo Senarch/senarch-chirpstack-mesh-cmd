@@ -62,6 +62,12 @@
       "params": [ { "name": "state", "type": "string", "values": ["on", "off"] } ]
     },
     {
+      "type": 156,
+      "name": "set-enforce-dc",
+      "description": "Enforce the relay's duty cycle (on: a frame that would exceed its band's budget is dropped) or only track it (off, default). Persisted.",
+      "params": [ { "name": "state", "type": "string", "values": ["on", "off"] } ]
+    },
+    {
       "type": 200,
       "name": "status",
       "description": "Compact health snapshot: uptime, load, temperature, memory, SenOS version, and the relay's duty cycle per band against its limit (dc=M:3.21%/1.00%,L:0.40%/1.00%); while an open-lte window runs, also lte=on(<minutes left>m,catm1|2g).",
