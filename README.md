@@ -97,6 +97,14 @@ Environment variables: `MESHCMD_BROKER`, `MESHCMD_USER`, `MESHCMD_PASS`, `MESHCM
 # duty-cycle budget for the mesh. "on" (the default) restores it. Persisted.
 ./mesh-cmd --config mesh-cmd.conf set-direct-uplink 11223344 off
 
+# a relay's DevAddr/JoinEUI filters normally apply only to the sensors it hears
+# itself; it still repeats every uplink other relays put into the mesh. "on"
+# applies its filters to those too, so a filtered relay next to an unfiltered one
+# stops repeating sensors outside its filters. "off" (the default) restores it.
+# Persisted. Give every relay of a site the same filters: with "on", a relay with
+# a narrower filter than its neighbours also stops repeating their sensors.
+./mesh-cmd --config mesh-cmd.conf set-filter-relayed 11223344 on
+
 # open a mesh-only relay's WiFi window for N minutes (default 30) to reach it, then close it
 ./mesh-cmd --config mesh-cmd.conf open-wifi 11223344 30
 ./mesh-cmd --config mesh-cmd.conf close-wifi 11223344
@@ -228,6 +236,9 @@ Each `send` below is exactly equivalent to the named subcommand next to it:
 
 # direct uplinks off (type 152, payload "off")     == set-direct-uplink 11223344 off
 ./mesh-cmd send 11223344 152 6f6666
+
+# filter relayed uplinks (type 153, payload "on")  == set-filter-relayed 11223344 on
+./mesh-cmd send 11223344 153 6f6e
 
 # open WiFi for 30 min (type 129, payload "30")    == open-wifi 11223344 30
 ./mesh-cmd send 11223344 129 3330
