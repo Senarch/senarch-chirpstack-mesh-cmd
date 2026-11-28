@@ -105,6 +105,12 @@ Environment variables: `MESHCMD_BROKER`, `MESHCMD_USER`, `MESHCMD_PASS`, `MESHCM
 # a narrower filter than its neighbours also stops repeating their sensors.
 ./mesh-cmd --config mesh-cmd.conf set-filter-relayed 11223344 on
 
+# enforce the relay's duty cycle: a frame that would exceed its band's budget is
+# dropped, not delayed (EU868). "off" (the default) only tracks it. Persisted.
+# A relay over its budget also drops its command replies, so the ack to "off"
+# can be lost although the relay applies it; check with `run status`.
+./mesh-cmd --config mesh-cmd.conf set-enforce-dc 11223344 on
+
 # open a mesh-only relay's WiFi window for N minutes (default 30) to reach it, then close it
 ./mesh-cmd --config mesh-cmd.conf open-wifi 11223344 30
 ./mesh-cmd --config mesh-cmd.conf close-wifi 11223344
@@ -239,6 +245,9 @@ Each `send` below is exactly equivalent to the named subcommand next to it:
 
 # filter relayed uplinks (type 153, payload "on")  == set-filter-relayed 11223344 on
 ./mesh-cmd send 11223344 153 6f6e
+
+# enforce duty cycle (type 156, payload "on")      == set-enforce-dc 11223344 on
+./mesh-cmd send 11223344 156 6f6e
 
 # open WiFi for 30 min (type 129, payload "30")    == open-wifi 11223344 30
 ./mesh-cmd send 11223344 129 3330
